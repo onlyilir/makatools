@@ -1,0 +1,11 @@
+# Build output and per-PC data
+dist/
+Logs/
+Backups/
+Makatools-settings.json
+*.log
+
+# Private: family logo and maintainer notes (they mention family and this PC)
+private/
+HANDOFF.md
+SHARING.md
