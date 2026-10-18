@@ -4,6 +4,8 @@ A free, open-source maintenance toolkit for Windows 10 and Windows 11 (64-bit). 
 
 ## Install
 
+**Download:** get `Makatools-Setup.exe` from the [latest release](https://github.com/onlyilir/makatools/releases/latest).
+
 **Easiest:** double-click `Makatools-Setup.exe` and answer **Yes**. It installs for your Windows account only, so it doesn't need administrator rights. It then adds Makatools to the Start menu and Desktop.
 
 **From the zip:** extract the whole `Makatools.zip`, then double-click `Install Makatools.bat`. The result is the same.
@@ -12,7 +14,7 @@ A free, open-source maintenance toolkit for Windows 10 and Windows 11 (64-bit). 
 
 To uninstall, go to **Settings > Apps > Makatools > Uninstall**.
 
-To update, run a newer `Makatools-Setup.exe` over the top. Your log, settings and backups are kept. If automatic updates are set up in your copy, **Check for updates** on the Dashboard does this for you.
+**Updates:** when Makatools opens, it checks this repository for a newer release and offers to install it. You can also press **Check for updates** on the Dashboard. A download only runs if its SHA-256 checksum matches the one GitHub published for the release. Your log, settings and backups are kept. You can also update by running a newer `Makatools-Setup.exe` over the top.
 
 ### Warnings you may see
 
@@ -98,11 +100,11 @@ Makatools refuses to disable, stop or end anything that belongs to your antiviru
 Makatools.ps1           entry point (relaunches in 64-bit PowerShell if needed)
 src\Core.ps1            all logic, no UI
 src\Ui.ps1              WinForms window; slow work runs in a background runspace with a progress bar
-SHARING.md              antivirus warnings, code signing, setting up automatic updates
 assets\                 logo.png and Makatools.ico
 setup\                  Install.ps1, Uninstall.ps1, Bootstrap.ps1 (used inside Setup.exe)
 build\Build-Bundle.ps1  makes dist\Makatools.ps1 (one file), dist\Makatools.zip, dist\Makatools-Setup.exe
-build\Make-Logo.ps1     makes the logo and icon from a photo
+build\Make-Logo.ps1     makes the logo and icon (neutral, or from a photo)
+build\Publish-Release.ps1  tests, builds and publishes a GitHub release (-DryRun to rehearse)
 tests\Run-Tests.ps1     unit + UI tests (temp folders, throwaway registry key)
 tests\Test-Setup.ps1    install/uninstall tests; add -SetupExe dist\Makatools-Setup.exe to test the exe
 ```
