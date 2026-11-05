@@ -1,0 +1,768 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Makatools" Width="1120" Height="760" MinWidth="960" MinHeight="620"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Page}"
+        FontFamily="{StaticResource UiFont}" FontSize="13.5" Foreground="{DynamicResource Ink}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="34" ResizeBorderThickness="6" CornerRadius="0"
+                        GlassFrameThickness="0,0,0,1" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+
+  <Window.Resources>
+    <!-- Status tag: colour follows the row's Tone -->
+    <Style x:Key="ToneBox" TargetType="Border" BasedOn="{StaticResource Tag}">
+      <Setter Property="Background" Value="{DynamicResource Track}"/>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Tone}" Value="good"><Setter Property="Background" Value="{DynamicResource GreenSoft}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Tone}" Value="warn"><Setter Property="Background" Value="{DynamicResource OrangeSoft}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Tone}" Value="bad"><Setter Property="Background" Value="{DynamicResource RedSoft}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Tone}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="ToneText" TargetType="TextBlock" BasedOn="{StaticResource TagText}">
+      <Setter Property="Foreground" Value="{DynamicResource Ink2}"/>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Tone}" Value="good"><Setter Property="Foreground" Value="{DynamicResource Green}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Tone}" Value="warn"><Setter Property="Foreground" Value="{DynamicResource Orange}"/></DataTrigger>
+        <DataTrigger Binding="{Binding Tone}" Value="bad"><Setter Property="Foreground" Value="{DynamicResource Red}"/></DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="DetailMaybe" TargetType="TextBlock" BasedOn="{StaticResource RowDetail}">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Detail}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Clickable tile on Home -->
+    <Style x:Key="Tile" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+      <Setter Property="Margin" Value="0,0,12,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border Style="{StaticResource CardBox}"/>
+              <Border x:Name="HoverLayer" Background="{DynamicResource Hover}" CornerRadius="12" Opacity="0"/>
+              <ContentPresenter Margin="16,14" HorizontalAlignment="Stretch"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="HoverLayer" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.12"/>
+                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="HoverLayer" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18"/>
+                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Cleanup row -->
+    <DataTemplate x:Key="CleanRow">
+      <Grid>
+        <Border x:Name="Sep" Style="{StaticResource RowLine}" Margin="46,0,0,0"/>
+        <CheckBox Style="{StaticResource CheckRow}" IsChecked="{Binding Selected, Mode=TwoWay}" IsEnabled="{Binding CanClean}">
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="{Binding Title}" Style="{StaticResource RowTitle}"/>
+              <TextBlock Text="{Binding Detail}" Style="{StaticResource DetailMaybe}"/>
+            </StackPanel>
+            <Border Grid.Column="1" Style="{StaticResource ToneBox}" Margin="10,0,0,0"><TextBlock Text="{Binding TagText}" Style="{StaticResource ToneText}"/></Border>
+            <TextBlock Grid.Column="2" Text="{Binding SizeText}" Style="{StaticResource RowValue}" Margin="14,0,0,0" MinWidth="64" TextAlignment="Right"/>
+          </Grid>
+        </CheckBox>
+      </Grid>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding RelativeSource={RelativeSource PreviousData}}" Value="{x:Null}">
+          <Setter TargetName="Sep" Property="Visibility" Value="Collapsed"/>
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <!-- Two-line row with a value on the right, used by Large Files, Duplicates, Recover, Apps -->
+    <DataTemplate x:Key="FileRow">
+      <Grid Margin="16,7,16,7" ToolTip="{Binding Tip}">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBlock Text="{Binding Title}" Style="{StaticResource RowTitle}"/>
+          <TextBlock Text="{Binding Detail}" Style="{StaticResource DetailMaybe}"/>
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource RowValue}" Margin="16,0,0,0"/>
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ProcessRow">
+      <Grid Margin="16,6" ToolTip="{Binding Path}">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/><ColumnDefinition Width="90"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="{Binding Name}" Style="{StaticResource RowTitle}"/>
+        </StackPanel>
+        <ProgressBar Grid.Column="1" Style="{StaticResource Bar}" Value="{Binding MemoryShare}" Height="5" Margin="0,0,20,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="2" Text="{Binding MemoryText}" Style="{StaticResource RowValue}" TextAlignment="Right"/>
+        <TextBlock Grid.Column="3" Text="{Binding Threads}" Style="{StaticResource RowValue}" TextAlignment="Right"/>
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ServiceRow">
+      <Grid Margin="16,6" ToolTip="{Binding Name}">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="110"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding DisplayName}" Style="{StaticResource RowTitle}"/>
+        <TextBlock Grid.Column="1" Text="{Binding StartType}" Style="{StaticResource RowValue}"/>
+        <Border Grid.Column="2" Style="{StaticResource ToneBox}" HorizontalAlignment="Right"><TextBlock Text="{Binding Status}" Style="{StaticResource ToneText}"/></Border>
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="StartupRow">
+      <Grid Margin="16,7" ToolTip="{Binding Command}">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Border Width="32" Height="32" CornerRadius="8" Background="{DynamicResource AccentSoft}">
+          <TextBlock Text="{Binding Initial}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <StackPanel Grid.Column="1" Margin="12,0,12,0" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Name}" Style="{StaticResource RowTitle}"/>
+          <TextBlock Text="{Binding Detail}" Style="{StaticResource DetailMaybe}"/>
+        </StackPanel>
+        <Border Grid.Column="2" Style="{StaticResource ToneBox}" Margin="0,0,12,0"><TextBlock Text="{Binding TagText}" Style="{StaticResource ToneText}"/></Border>
+        <ToggleButton Grid.Column="3" Style="{StaticResource Switch}" IsChecked="{Binding IsOn, Mode=OneWay}" IsEnabled="{Binding CanChange}" AutomationProperties.Name="{Binding Name}"/>
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="DriveRow">
+      <Grid Margin="16,11">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" FontSize="20" Foreground="{DynamicResource Ink2}" Margin="0,0,14,0"/>
+        <StackPanel Grid.Column="1">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Right" Text="{Binding FreeText}" Style="{StaticResource RowDetail}" Margin="12,0,0,0"/>
+            <TextBlock Text="{Binding Title}" Style="{StaticResource RowTitle}"/>
+          </DockPanel>
+          <ProgressBar Style="{StaticResource Bar}" Value="{Binding UsedPct}" Margin="0,6,0,0" Foreground="{Binding BarBrush}"/>
+        </StackPanel>
+        <Border Grid.Column="2" Style="{StaticResource ToneBox}" Margin="14,0,0,0"><TextBlock Text="{Binding TagText}" Style="{StaticResource ToneText}"/></Border>
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="FactRow">
+      <Grid>
+        <Border x:Name="Sep" Style="{StaticResource RowLine}" Margin="16,0,0,0"/>
+        <DockPanel Margin="16,9">
+          <TextBlock Text="{Binding Value}" DockPanel.Dock="Right" Foreground="{DynamicResource Ink2}" FontSize="13.5" TextTrimming="CharacterEllipsis" MaxWidth="560"/>
+          <TextBlock Text="{Binding Key}" FontSize="13.5"/>
+        </DockPanel>
+      </Grid>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding RelativeSource={RelativeSource PreviousData}}" Value="{x:Null}">
+          <Setter TargetName="Sep" Property="Visibility" Value="Collapsed"/>
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <DataTemplate x:Key="DiskCard">
+      <Border Style="{StaticResource CardBox}" Margin="0,0,0,12" Padding="18,15">
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <StackPanel>
+            <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="{Binding Detail}" Style="{StaticResource RowDetail}"/>
+          </StackPanel>
+          <Border Grid.Column="1" Style="{StaticResource ToneBox}"><TextBlock Text="{Binding TagText}" Style="{StaticResource ToneText}"/></Border>
+          <UniformGrid Grid.Row="1" Grid.ColumnSpan="2" Columns="3" Margin="0,12,0,0">
+            <StackPanel><TextBlock Text="Temperature" Style="{StaticResource RowDetail}"/><TextBlock Text="{Binding TempText}" FontSize="17" FontWeight="SemiBold"/></StackPanel>
+            <StackPanel><TextBlock Text="Wear" Style="{StaticResource RowDetail}"/><TextBlock Text="{Binding WearText}" FontSize="17" FontWeight="SemiBold"/></StackPanel>
+            <StackPanel><TextBlock Text="Read errors" Style="{StaticResource RowDetail}"/><TextBlock Text="{Binding ErrText}" FontSize="17" FontWeight="SemiBold"/></StackPanel>
+          </UniformGrid>
+        </Grid>
+      </Border>
+    </DataTemplate>
+
+    <DataTemplate x:Key="LogRow">
+      <Grid Margin="16,5">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding When}" Style="{StaticResource RowDetail}" VerticalAlignment="Top" Margin="0,1,0,0"/>
+        <TextBlock Grid.Column="1" Text="{Binding Message}" FontSize="13" TextWrapping="Wrap"/>
+      </Grid>
+    </DataTemplate>
+  </Window.Resources>
+
+  <Grid x:Name="Root" Background="{DynamicResource Page}">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="236"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- ================================================================= sidebar -->
+    <Border Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+      <DockPanel Margin="12,0,12,12">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="7,16,0,8">
+          <Image x:Name="SideLogo" Width="30" Height="30" RenderOptions.BitmapScalingMode="HighQuality"/>
+          <TextBlock Text="Makatools" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom">
+          <Button x:Name="UpdateChip" Style="{StaticResource Primary}" Margin="0,8,0,0" Visibility="Collapsed" Content="Update available"/>
+          <Button x:Name="AdminChip" Style="{StaticResource Secondary}" Margin="0,8,0,4" Padding="8,6" ToolTip="Some tools need administrator rights">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE7EF;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,7,0"/>
+              <TextBlock Text="Run as administrator" FontSize="13"/>
+            </StackPanel>
+          </Button>
+          <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" Tag="Settings">
+            <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#8E8E93"><TextBlock Text="&#xE713;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Settings" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+          </RadioButton>
+        </StackPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+          <StackPanel x:Name="NavList">
+            <RadioButton x:Name="NavHome" Style="{StaticResource NavItem}" Tag="Home" IsChecked="True">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#007AFF"><TextBlock Text="&#xE80F;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Home" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+
+            <TextBlock Text="Clean" Style="{StaticResource NavHead}"/>
+            <RadioButton x:Name="NavCleanup" Style="{StaticResource NavItem}" Tag="Cleanup">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#34C759"><TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Cleanup" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavLarge" Style="{StaticResource NavItem}" Tag="Large">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#FF9500"><TextBlock Text="&#xED25;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Large Files" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavDup" Style="{StaticResource NavItem}" Tag="Dup">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#AF52DE"><TextBlock Text="&#xE8C8;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Duplicates" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+
+            <TextBlock Text="Speed" Style="{StaticResource NavHead}"/>
+            <RadioButton x:Name="NavStartup" Style="{StaticResource NavItem}" Tag="Startup">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#FF2D55"><TextBlock Text="&#xE7E8;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Startup" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavApps" Style="{StaticResource NavItem}" Tag="Apps">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#5856D6"><TextBlock Text="&#xE71D;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Apps" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavProc" Style="{StaticResource NavItem}" Tag="Proc">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#32ADE6"><TextBlock Text="&#xE9D9;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Processes" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavSvc" Style="{StaticResource NavItem}" Tag="Svc">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#64748B"><TextBlock Text="&#xE90F;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Services" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+
+            <TextBlock Text="Files" Style="{StaticResource NavHead}"/>
+            <RadioButton x:Name="NavRecover" Style="{StaticResource NavItem}" Tag="Recover">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#30B0C7"><TextBlock Text="&#xE7A7;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Recover Deleted" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavShred" Style="{StaticResource NavItem}" Tag="Shred">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#FF3B30"><TextBlock Text="&#xE72E;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Secure Delete" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+
+            <TextBlock Text="Health" Style="{StaticResource NavHead}"/>
+            <RadioButton x:Name="NavDisk" Style="{StaticResource NavItem}" Tag="Disk">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#A2845E"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Disk Health" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="NavLog" Style="{StaticResource NavItem}" Tag="Log">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#636366"><TextBlock Text="&#xE81C;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Activity Log" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
+          </StackPanel>
+        </ScrollViewer>
+      </DockPanel>
+    </Border>
+
+    <!-- ================================================================= pages -->
+    <Grid x:Name="Pages" Grid.Column="1">
+
+      <!-- ............................................................. Home -->
+      <ScrollViewer x:Name="PageHome" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel Margin="32,40,32,32">
+          <Border CornerRadius="16" MinHeight="196">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#0A84FF" Offset="0"/>
+                <GradientStop Color="#5E5CE6" Offset="1"/>
+              </LinearGradientBrush>
+            </Border.Background>
+            <Grid Margin="30,24">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock x:Name="HeroKicker" Text="Checking your PC" Foreground="#DDFFFFFF" FontSize="14" FontWeight="SemiBold"/>
+                <TextBlock x:Name="HeroBig" Text="&#x2013;" Foreground="White" FontSize="52" FontWeight="SemiBold" Margin="0,2,0,0" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="HeroSub" Text="Looking for temporary files and caches. Nothing is deleted yet." Foreground="#E6FFFFFF" FontSize="14" TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Left"/>
+                <ProgressBar x:Name="HeroBar" Style="{StaticResource Bar}" Foreground="White" Background="#40FFFFFF" Margin="0,14,0,0" Width="340" HorizontalAlignment="Left" IsIndeterminate="True"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="24,0,0,0">
+                <Button x:Name="HeroClean" Style="{StaticResource OnGradient}" Content="Clean Now" Visibility="Collapsed"/>
+                <Button x:Name="HeroReview" Style="{StaticResource OnGradientQuiet}" Content="Review Items" Margin="0,8,0,0" Visibility="Collapsed"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <Grid Margin="0,14,-12,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <Button x:Name="TileStorage" Style="{StaticResource Tile}" Grid.Column="0" ToolTip="See what takes up the most space">
+              <StackPanel>
+                <DockPanel><Border Width="26" Height="26" CornerRadius="7" Background="#FF9500" DockPanel.Dock="Left"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" FontSize="14" Foreground="White"/></Border><TextBlock Text="Storage" Margin="9,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}" FontSize="13"/></DockPanel>
+                <TextBlock x:Name="TileStorageValue" Text="&#x2013;" FontSize="22" FontWeight="SemiBold" Margin="0,11,0,0" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="TileStorageSub" Text=" " Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </Button>
+            <Button x:Name="TileMemory" Style="{StaticResource Tile}" Grid.Column="1" ToolTip="See which programs use the most memory">
+              <StackPanel>
+                <DockPanel><Border Width="26" Height="26" CornerRadius="7" Background="#32ADE6" DockPanel.Dock="Left"><TextBlock Text="&#xE9D9;" Style="{StaticResource Glyph}" FontSize="14" Foreground="White"/></Border><TextBlock Text="Memory" Margin="9,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}" FontSize="13"/></DockPanel>
+                <TextBlock x:Name="TileMemoryValue" Text="&#x2013;" FontSize="22" FontWeight="SemiBold" Margin="0,11,0,0" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="TileMemorySub" Text=" " Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </Button>
+            <Button x:Name="TileStartup" Style="{StaticResource Tile}" Grid.Column="2" ToolTip="Choose what starts with Windows">
+              <StackPanel>
+                <DockPanel><Border Width="26" Height="26" CornerRadius="7" Background="#FF2D55" DockPanel.Dock="Left"><TextBlock Text="&#xE7E8;" Style="{StaticResource Glyph}" FontSize="14" Foreground="White"/></Border><TextBlock Text="Startup" Margin="9,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}" FontSize="13"/></DockPanel>
+                <TextBlock x:Name="TileStartupValue" Text="&#x2013;" FontSize="22" FontWeight="SemiBold" Margin="0,11,0,0" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="TileStartupSub" Text=" " Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </Button>
+            <Button x:Name="TileHealth" Style="{StaticResource Tile}" Grid.Column="3" ToolTip="See your disks in detail">
+              <StackPanel>
+                <DockPanel><Border Width="26" Height="26" CornerRadius="7" Background="#34C759" DockPanel.Dock="Left"><TextBlock Text="&#xEA18;" Style="{StaticResource Glyph}" FontSize="14" Foreground="White"/></Border><TextBlock Text="Health" Margin="9,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Ink2}" FontSize="13"/></DockPanel>
+                <TextBlock x:Name="TileHealthValue" Text="&#x2013;" FontSize="22" FontWeight="SemiBold" Margin="0,11,0,0" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="TileHealthSub" Text=" " Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </Button>
+          </Grid>
+
+          <TextBlock Text="Drives" Style="{StaticResource Section}"/>
+          <Border Style="{StaticResource CardBox}">
+            <ItemsControl x:Name="DriveList" ItemTemplate="{StaticResource DriveRow}" Margin="0,3"/>
+          </Border>
+
+          <TextBlock Text="This PC" Style="{StaticResource Section}"/>
+          <Border Style="{StaticResource CardBox}">
+            <ItemsControl x:Name="FactList" ItemTemplate="{StaticResource FactRow}"/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ............................................................. Cleanup -->
+      <Grid x:Name="PageCleanup" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <Button x:Name="CleanRescan" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Scan Again" VerticalAlignment="Center"/>
+          <StackPanel>
+            <TextBlock Text="Cleanup" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="Safe items are ticked for you. Passwords, bookmarks and the registry are never touched." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <ScrollViewer x:Name="CleanScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" Focusable="False">
+          <StackPanel Margin="32,0,32,16">
+            <StackPanel x:Name="CleanLoading" Margin="0,70,0,0" HorizontalAlignment="Center" Width="240">
+              <TextBlock x:Name="CleanLoadingText" Text="Scanning your PC" HorizontalAlignment="Center" Foreground="{DynamicResource Ink2}"/>
+              <ProgressBar Style="{StaticResource Bar}" IsIndeterminate="True" Margin="0,12,0,0"/>
+            </StackPanel>
+            <StackPanel x:Name="CleanSections" Visibility="Collapsed">
+              <StackPanel x:Name="SecSafe">
+                <TextBlock Text="Recommended" Style="{StaticResource Section}" Margin="4,0,0,8"/>
+                <Border Style="{StaticResource CardBox}"><ItemsControl x:Name="ListSafe" ItemTemplate="{StaticResource CleanRow}" Focusable="False"/></Border>
+              </StackPanel>
+              <StackPanel x:Name="SecAdmin">
+                <TextBlock Text="Needs administrator" Style="{StaticResource Section}"/>
+                <Border Style="{StaticResource CardBox}"><ItemsControl x:Name="ListAdmin" ItemTemplate="{StaticResource CleanRow}" Focusable="False"/></Border>
+              </StackPanel>
+              <StackPanel x:Name="SecOptional">
+                <TextBlock Text="Your decision" Style="{StaticResource Section}"/>
+                <Border Style="{StaticResource CardBox}"><ItemsControl x:Name="ListOptional" ItemTemplate="{StaticResource CleanRow}" Focusable="False"/></Border>
+              </StackPanel>
+              <StackPanel x:Name="SecPrivacy">
+                <TextBlock Text="Privacy" Style="{StaticResource Section}"/>
+                <Border Style="{StaticResource CardBox}"><ItemsControl x:Name="ListPrivacy" ItemTemplate="{StaticResource CleanRow}" Focusable="False"/></Border>
+              </StackPanel>
+              <TextBlock Text="Windows" Style="{StaticResource Section}"/>
+              <Border Style="{StaticResource CardBox}">
+                <DockPanel Margin="16,11">
+                  <Button x:Name="CleanComponents" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Clean Up" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                  <StackPanel>
+                    <TextBlock Text="Windows Update leftovers" Style="{StaticResource RowTitle}"/>
+                    <TextBlock Text="Removes old versions of system files. Can take 10 minutes or more." Style="{StaticResource RowDetail}"/>
+                  </StackPanel>
+                </DockPanel>
+              </Border>
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+        <Border Grid.Row="2" Background="{DynamicResource Page}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0">
+          <DockPanel Margin="32,12">
+            <Button x:Name="CleanGo" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Clean" MinWidth="110" IsEnabled="False"/>
+            <TextBlock x:Name="CleanTotal" Text="Nothing selected" VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold"/>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Large Files -->
+      <Grid x:Name="PageLarge" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button x:Name="LargeReveal" Style="{StaticResource Secondary}" Content="Show in Folder" IsEnabled="False" Margin="0,0,8,0"/>
+            <Button x:Name="LargeBin" Style="{StaticResource Secondary}" Content="Move to Recycle Bin" IsEnabled="False"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Large Files" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="The 200 biggest files in a folder." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <DockPanel Grid.Row="1" Margin="32,0,32,12">
+          <Button x:Name="LargeFind" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Find Files" Margin="8,0,0,0"/>
+          <Button x:Name="LargeChoose" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Choose Folder" Margin="8,0,0,0"/>
+          <TextBox x:Name="LargePath" Style="{StaticResource Field}"/>
+        </DockPanel>
+        <Border Grid.Row="2" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="LargeList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FileRow}" SelectionMode="Extended"/>
+            <TextBlock x:Name="LargeEmpty" Text="Choose a folder and press Find Files." Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Duplicates -->
+      <Grid x:Name="PageDup" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <Button x:Name="DupBin" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Move to Recycle Bin" IsEnabled="False" VerticalAlignment="Center"/>
+          <StackPanel>
+            <TextBlock Text="Duplicates" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="Finds identical copies of files over 1 MB. Select the copies you don't need." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <DockPanel Grid.Row="1" Margin="32,0,32,12">
+          <Button x:Name="DupFind" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Find Duplicates" Margin="8,0,0,0"/>
+          <Button x:Name="DupChoose" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Choose Folder" Margin="8,0,0,0"/>
+          <TextBox x:Name="DupPath" Style="{StaticResource Field}"/>
+        </DockPanel>
+        <Border Grid.Row="2" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="DupList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FileRow}" SelectionMode="Extended"/>
+            <TextBlock x:Name="DupEmpty" Text="Choose a folder and press Find Duplicates." Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Startup -->
+      <Grid x:Name="PageStartup" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <TextBox x:Name="StartupSearch" DockPanel.Dock="Right" Style="{StaticResource SearchField}" VerticalAlignment="Center"/>
+          <StackPanel>
+            <TextBlock Text="Startup" Style="{StaticResource PageTitle}"/>
+            <TextBlock x:Name="StartupSub" Text="Choose what starts with Windows." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="StartupList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource StartupRow}">
+              <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem" BasedOn="{StaticResource PlainRow}"/></ListBox.ItemContainerStyle>
+            </ListBox>
+            <TextBlock x:Name="StartupEmpty" Text="Loading" Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Apps -->
+      <Grid x:Name="PageApps" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBox x:Name="AppsSearch" Style="{StaticResource SearchField}" Margin="0,0,8,0"/>
+            <Button x:Name="AppsUninstall" Style="{StaticResource Secondary}" Content="Uninstall" IsEnabled="False"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Apps" Style="{StaticResource PageTitle}"/>
+            <TextBlock x:Name="AppsSub" Text="Everything installed on this PC." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="AppsList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FileRow}"/>
+            <TextBlock x:Name="AppsEmpty" Text="Loading" Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Processes -->
+      <Grid x:Name="PageProc" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBox x:Name="ProcSearch" Style="{StaticResource SearchField}" Margin="0,0,8,0"/>
+            <Button x:Name="ProcRefresh" Style="{StaticResource Secondary}" Content="Refresh" Margin="0,0,8,0"/>
+            <Button x:Name="ProcEnd" Style="{StaticResource Secondary}" Content="End Process" IsEnabled="False"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Processes" Style="{StaticResource PageTitle}"/>
+            <TextBlock x:Name="ProcSub" Text="What's running now, biggest first." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid Margin="16,11,26,5">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/><ColumnDefinition Width="90"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions>
+              <TextBlock Text="Name" Style="{StaticResource ColumnHead}"/>
+              <TextBlock Grid.Column="2" Text="Memory" Style="{StaticResource ColumnHead}" TextAlignment="Right"/>
+              <TextBlock Grid.Column="3" Text="Threads" Style="{StaticResource ColumnHead}" TextAlignment="Right"/>
+            </Grid>
+            <ListBox x:Name="ProcList" Grid.Row="1" Style="{StaticResource Rows}" ScrollViewer.VerticalScrollBarVisibility="Visible" ItemTemplate="{StaticResource ProcessRow}"/>
+            <TextBlock x:Name="ProcEmpty" Grid.Row="1" Text="Loading" Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Services -->
+      <Grid x:Name="PageSvc" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBox x:Name="SvcSearch" Style="{StaticResource SearchField}" Margin="0,0,8,0"/>
+            <Button x:Name="SvcStart" Style="{StaticResource Secondary}" Content="Start" IsEnabled="False" Margin="0,0,8,0"/>
+            <Button x:Name="SvcStop" Style="{StaticResource Secondary}" Content="Stop" IsEnabled="False"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Services" Style="{StaticResource PageTitle}"/>
+            <TextBlock x:Name="SvcSub" Text="Windows background services." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid Margin="16,11,26,5">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="110"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
+              <TextBlock Text="Name" Style="{StaticResource ColumnHead}"/>
+              <TextBlock Grid.Column="1" Text="Starts" Style="{StaticResource ColumnHead}"/>
+              <TextBlock Grid.Column="2" Text="Status" Style="{StaticResource ColumnHead}" TextAlignment="Right"/>
+            </Grid>
+            <ListBox x:Name="SvcList" Grid.Row="1" Style="{StaticResource Rows}" ScrollViewer.VerticalScrollBarVisibility="Visible" ItemTemplate="{StaticResource ServiceRow}"/>
+            <TextBlock x:Name="SvcEmpty" Grid.Row="1" Text="Loading" Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Recover -->
+      <Grid x:Name="PageRecover" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBox x:Name="RecoverSearch" Style="{StaticResource SearchField}" Margin="0,0,8,0"/>
+            <Button x:Name="RecoverGo" Style="{StaticResource Primary}" Content="Restore" IsEnabled="False"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Recover Deleted" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="Puts Recycle Bin files back where they came from." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="RecoverList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FileRow}" SelectionMode="Extended"/>
+            <TextBlock x:Name="RecoverEmpty" Text="Loading" Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Secure Delete -->
+      <ScrollViewer x:Name="PageShred" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel Margin="32,40,32,32">
+          <TextBlock Text="Secure Delete" Style="{StaticResource PageTitle}"/>
+          <TextBlock Text="Overwrites a file with random data, then deletes it. It can't be recovered with normal tools." Style="{StaticResource PageSub}"/>
+
+          <Grid x:Name="ShredDrop" AllowDrop="True" Margin="0,20,0,0" MinHeight="170" Background="Transparent" Cursor="Hand">
+            <Rectangle x:Name="ShredDash" RadiusX="12" RadiusY="12" Stroke="{DynamicResource LineStrong}" StrokeThickness="1.5" StrokeDashArray="5,4"/>
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24,20" IsHitTestVisible="False">
+              <TextBlock x:Name="ShredIcon" Text="&#xE8E5;" Style="{StaticResource Glyph}" FontSize="30" Foreground="{DynamicResource Ink3}"/>
+              <TextBlock x:Name="ShredName" Text="Drop a file here" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="ShredPathText" Text="or click to choose one" Foreground="{DynamicResource Ink2}" HorizontalAlignment="Center" Margin="0,3,0,0" FontSize="12.5" TextTrimming="CharacterEllipsis" MaxWidth="560"/>
+            </StackPanel>
+          </Grid>
+
+          <Border Style="{StaticResource CardBox}" Margin="0,16,0,0">
+            <DockPanel Margin="16,11">
+              <Border DockPanel.Dock="Right" Style="{StaticResource SegmentTrack}" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                  <RadioButton x:Name="Pass1" Style="{StaticResource Segment}" GroupName="Passes" Content="1" IsChecked="True"/>
+                  <RadioButton x:Name="Pass3" Style="{StaticResource Segment}" GroupName="Passes" Content="3"/>
+                  <RadioButton x:Name="Pass7" Style="{StaticResource Segment}" GroupName="Passes" Content="7"/>
+                </StackPanel>
+              </Border>
+              <StackPanel>
+                <TextBlock Text="Overwrite passes" Style="{StaticResource RowTitle}"/>
+                <TextBlock Text="One pass is enough for modern drives. More passes take longer." Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </DockPanel>
+          </Border>
+
+          <Border Background="{DynamicResource OrangeSoft}" CornerRadius="12" Padding="16,12" Margin="0,12,0,0">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" Style="{StaticResource Glyph}" FontSize="16" Foreground="{DynamicResource Orange}" VerticalAlignment="Top" Margin="0,2,12,0"/>
+              <TextBlock Style="{StaticResource Body}" Foreground="{DynamicResource Ink}" Text="This can't be undone and skips the Recycle Bin. On SSDs, the drive itself can keep old copies of data, so this isn't a guarantee of erasure."/>
+            </DockPanel>
+          </Border>
+
+          <Button x:Name="ShredGo" Style="{StaticResource Danger}" Content="Delete Permanently" IsEnabled="False" HorizontalAlignment="Right" Margin="0,16,0,0" MinWidth="170"/>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ............................................................. Disk Health -->
+      <ScrollViewer x:Name="PageDisk" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel Margin="32,40,32,32">
+          <TextBlock Text="Disk Health" Style="{StaticResource PageTitle}"/>
+          <TextBlock x:Name="DiskSub" Text="How your drives are doing." Style="{StaticResource PageSub}" Margin="0,3,0,16"/>
+          <ItemsControl x:Name="DiskList" ItemTemplate="{StaticResource DiskCard}" Focusable="False"/>
+
+          <TextBlock Text="Volume tools" Style="{StaticResource Section}" Margin="4,10,0,8"/>
+          <Border Style="{StaticResource CardBox}" Padding="16,13">
+            <StackPanel>
+              <DockPanel>
+                <Border DockPanel.Dock="Right" Style="{StaticResource SegmentTrack}" VerticalAlignment="Center"><StackPanel x:Name="VolumePick" Orientation="Horizontal"/></Border>
+                <StackPanel>
+                  <TextBlock Text="Drive" Style="{StaticResource RowTitle}"/>
+                  <TextBlock Text="These tools need administrator rights." Style="{StaticResource RowDetail}"/>
+                </StackPanel>
+              </DockPanel>
+              <WrapPanel Margin="0,12,0,0">
+                <Button x:Name="DiskScan" Style="{StaticResource Secondary}" Content="Check for Errors" Margin="0,0,8,0" ToolTip="Read-only scan"/>
+                <Button x:Name="DiskAnalyze" Style="{StaticResource Secondary}" Content="Analyze Fragmentation" Margin="0,0,8,0" ToolTip="Read-only report"/>
+                <Button x:Name="DiskOptimize" Style="{StaticResource Secondary}" Content="Optimize Drive"/>
+              </WrapPanel>
+              <TextBox x:Name="DiskOutput" Margin="0,12,0,0" Visibility="Collapsed" IsReadOnly="True" BorderThickness="0" Background="Transparent" Foreground="{DynamicResource Ink2}" FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap" MaxHeight="220" VerticalScrollBarVisibility="Auto"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ............................................................. Activity Log -->
+      <Grid x:Name="PageLog" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel Margin="32,40,32,12">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button x:Name="LogOpen" Style="{StaticResource Secondary}" Content="Open Log Folder"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Activity Log" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="Everything Makatools has changed on this PC, newest first." Style="{StaticResource PageSub}"/>
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource CardBox}" Margin="32,0,32,28">
+          <Grid>
+            <ListBox x:Name="LogList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource LogRow}">
+              <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem" BasedOn="{StaticResource PlainRow}"/></ListBox.ItemContainerStyle>
+            </ListBox>
+            <TextBlock x:Name="LogEmpty" Text="Nothing yet." Foreground="{DynamicResource Ink3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ............................................................. Settings -->
+      <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel Margin="32,40,32,32">
+          <TextBlock Text="Settings" Style="{StaticResource PageTitle}"/>
+
+          <TextBlock Text="General" Style="{StaticResource Section}"/>
+          <Border Style="{StaticResource CardBox}">
+            <StackPanel>
+              <DockPanel Margin="16,11">
+                <Border DockPanel.Dock="Right" Style="{StaticResource SegmentTrack}" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="ThemeSystem" Style="{StaticResource Segment}" GroupName="Theme" Content="System"/>
+                    <RadioButton x:Name="ThemeLight" Style="{StaticResource Segment}" GroupName="Theme" Content="Light"/>
+                    <RadioButton x:Name="ThemeDark" Style="{StaticResource Segment}" GroupName="Theme" Content="Dark"/>
+                  </StackPanel>
+                </Border>
+                <TextBlock Text="Appearance" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+              </DockPanel>
+              <Border Style="{StaticResource RowLine}" Margin="16,0,0,0"/>
+              <DockPanel Margin="16,11">
+                <ToggleButton x:Name="ReminderSwitch" DockPanel.Dock="Right" Style="{StaticResource Switch}"/>
+                <StackPanel>
+                  <TextBlock Text="Weekly cleanup reminder" Style="{StaticResource RowTitle}"/>
+                  <TextBlock Text="Home tells you when it's been a week since the last cleanup." Style="{StaticResource RowDetail}"/>
+                </StackPanel>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+
+          <TextBlock Text="Permissions" Style="{StaticResource Section}"/>
+          <Border Style="{StaticResource CardBox}">
+            <DockPanel Margin="16,11">
+              <Button x:Name="SettingsAdmin" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Run as Administrator" VerticalAlignment="Center" Margin="12,0,0,0"/>
+              <StackPanel>
+                <TextBlock x:Name="AdminTitle" Text="Standard rights" Style="{StaticResource RowTitle}"/>
+                <TextBlock x:Name="AdminText" Text="Services, disk tools and some cleanup items need administrator rights." Style="{StaticResource RowDetail}"/>
+              </StackPanel>
+            </DockPanel>
+          </Border>
+
+          <TextBlock Text="About" Style="{StaticResource Section}"/>
+          <Border Style="{StaticResource CardBox}">
+            <StackPanel>
+              <DockPanel Margin="16,14">
+                <Image x:Name="AboutLogo" DockPanel.Dock="Left" Width="48" Height="48" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <Button x:Name="SettingsUpdate" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Check for Updates" VerticalAlignment="Center"/>
+                <StackPanel VerticalAlignment="Center">
+                  <TextBlock Text="Makatools" FontSize="15" FontWeight="SemiBold"/>
+                  <TextBlock x:Name="AboutVersion" Text="Version" Style="{StaticResource RowDetail}"/>
+                </StackPanel>
+              </DockPanel>
+              <Border Style="{StaticResource RowLine}" Margin="16,0,0,0"/>
+              <DockPanel Margin="16,8">
+                <Button x:Name="OpenGitHub" DockPanel.Dock="Right" Style="{StaticResource Quiet}" Content="View on GitHub"/>
+                <TextBlock Text="Free and open source. MIT License. No ads, no paid tiers, no telemetry." Style="{StaticResource RowDetail}" VerticalAlignment="Center"/>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ............................................................. floating status pill -->
+      <Border x:Name="TaskPill" Background="{DynamicResource Pill}" CornerRadius="19" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+              Margin="0,0,0,22" Padding="18,0,6,0" MinHeight="38" MaxWidth="660" Visibility="Collapsed" Opacity="0">
+        <Border.RenderTransform><TranslateTransform x:Name="PillMove" Y="0"/></Border.RenderTransform>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock x:Name="TaskIcon" Text="&#xE73E;" Style="{StaticResource Glyph}" FontSize="12" Foreground="{DynamicResource PillInk}" Margin="0,0,9,0" Visibility="Collapsed"/>
+          <TextBlock x:Name="TaskText" Foreground="{DynamicResource PillInk}" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="400" Margin="0,0,12,0"/>
+          <ProgressBar x:Name="TaskBar" Style="{StaticResource Bar}" Width="110" Height="5" Margin="0,0,8,0" Background="#40808080" IsIndeterminate="True"/>
+          <Button x:Name="TaskCancel" Style="{StaticResource Quiet}" Content="Cancel" MinHeight="26" Padding="10,2" Foreground="{DynamicResource PillInk2}"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- ================================================================= caption buttons -->
+    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+      <Button x:Name="CapMin" Style="{StaticResource Caption}" Content="&#xE921;" ToolTip="Minimize" AutomationProperties.Name="Minimize"/>
+      <Button x:Name="CapMax" Style="{StaticResource Caption}" Content="&#xE922;" ToolTip="Maximize" AutomationProperties.Name="Maximize"/>
+      <Button x:Name="CapClose" Style="{StaticResource CaptionClose}" Content="&#xE8BB;" ToolTip="Close" AutomationProperties.Name="Close"/>
+    </StackPanel>
+
+    <!-- ================================================================= in-window dialog -->
+    <Grid x:Name="Sheet" Grid.ColumnSpan="2" Background="{DynamicResource Scrim}" Visibility="Collapsed" Opacity="0">
+      <Grid x:Name="SheetBody" Width="430" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+        <Grid.RenderTransform><ScaleTransform x:Name="SheetScale" ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+        <Border Background="{DynamicResource Card}" CornerRadius="16">
+          <Border.Effect><DropShadowEffect BlurRadius="40" ShadowDepth="10" Direction="270" Opacity="0.3"/></Border.Effect>
+        </Border>
+        <StackPanel Margin="26,24,26,20">
+          <Border x:Name="SheetIconBox" Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoft}" HorizontalAlignment="Left">
+            <TextBlock x:Name="SheetIcon" Text="&#xE946;" Style="{StaticResource Glyph}" FontSize="21" Foreground="{DynamicResource Accent}"/>
+          </Border>
+          <TextBlock x:Name="SheetTitle" FontSize="18" FontWeight="SemiBold" Margin="0,13,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Ink}" TextOptions.TextFormattingMode="Ideal"/>
+          <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,7,0,0" Focusable="False">
+            <TextBlock x:Name="SheetText" Style="{StaticResource Body}"/>
+          </ScrollViewer>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="SheetNo" Style="{StaticResource Secondary}" Content="Cancel" MinWidth="90" Margin="0,0,8,0"/>
+            <Button x:Name="SheetYes" Style="{StaticResource Primary}" Content="OK" MinWidth="90" IsDefault="True"/>
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>

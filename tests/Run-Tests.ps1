@@ -432,6 +432,40 @@ Test-Case 'Get-DiskHealth returns at least one disk' {
 
 Test-Case 'Get-SystemSummary mentions Windows' { Assert ((Get-SystemSummary) -match 'Windows') 'no Windows line' }
 
+Test-Case 'All script files are pure ASCII (PowerShell 5.1 misreads anything else)' {
+    foreach ($f in Get-ChildItem -LiteralPath $repo -Recurse -File | Where-Object { $_.Extension -in '.ps1', '.bat' -and $_.FullName -notmatch '\\(dist|private|\.git)\\' }) {
+        $bytes = [IO.File]::ReadAllBytes($f.FullName)
+        $start = $(if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 })
+        for ($i = $start; $i -lt $bytes.Length; $i++) { Assert ($bytes[$i] -lt 128) "$($f.Name) has a non-ASCII byte at $i" }
+    }
+}
+
+Test-Case 'Format-FuSize reads like a person wrote it' {
+    Assert ((Format-FuSize 512) -eq '512 bytes') (Format-FuSize 512)
+    Assert ((Format-FuSize 2048) -eq '2 KB') (Format-FuSize 2048)
+    Assert ((Format-FuSize 823MB) -eq '823 MB') (Format-FuSize 823MB)
+    Assert ((Format-FuSize 2.34GB) -eq '2.3 GB') (Format-FuSize 2.34GB)
+    Assert ((Format-FuSize 1.5TB) -eq '1.5 TB') (Format-FuSize 1.5TB)
+}
+
+Test-Case 'Get-SystemInfo returns everything Home needs' {
+    $i = Get-SystemInfo
+    Assert ($i.Computer -and $i.Windows -and $i.Processor) 'missing basics'
+    Assert ($i.MemoryBytes -gt 0 -and $i.MemoryUsed -gt 0 -and $i.MemoryUsed -le $i.MemoryBytes) 'bad memory figures'
+    Assert (@($i.Volumes).Count -ge 1 -and $i.SystemDrive) 'no volumes'
+    Assert (@($i.Volumes | Where-Object { $_.Letter -eq $i.SystemDrive }).Count -eq 1) 'system drive not among the volumes'
+}
+
+Test-Case 'Get-FuLogEntries returns newest first and skips damaged lines' {
+    $log = Join-Path $tmp 'Logs\freeutil.log'
+    $keep = Get-Content -LiteralPath $log
+    Set-Content -LiteralPath $log -Value @('2026-01-01 10:00:00 [INFO] first', 'garbage', '2026-01-02 11:30:05 [INFO] second')
+    $rows = @(Get-FuLogEntries)
+    Set-Content -LiteralPath $log -Value $keep
+    Assert ($rows.Count -eq 2) "rows: $($rows.Count)"
+    Assert ($rows[0].Message -eq 'second' -and $rows[0].When -eq '2026-01-02 11:30') "first row: $($rows[0].When) $($rows[0].Message)"
+}
+
 # ---------------------------------------------------------------- admin only
 # Run elevated to include these: they need Administrator rights and change nothing of the user's.
 
@@ -469,214 +503,485 @@ if (Test-FuAdmin) {
 }
 
 # ---------------------------------------------------------------- UI
-# Builds the real window off-screen and clicks buttons from here, outside the Add-*Tab functions,
-# which is where the handlers run in real use. Message boxes are replaced so nothing blocks.
+# Shows the real window off-screen and presses its real buttons. Nothing here cleans this PC: what
+# a test cleans or shreds is in its temp folder, and anything else is replaced by a stand-in defined
+# inside that test. Dialogs are replaced so nothing waits for a click, except the one test of the
+# real dialog.
 
 if (-not $SkipUi) {
     . (Join-Path $repo 'src\Ui.ps1')
     $script:Infos = New-Object System.Collections.ArrayList
     $script:ConfirmAnswer = $true
-    function Show-FuInfo($Text, $Icon = 'Information') { [void]$script:Infos.Add([string]$Text) }
-    function Confirm-FuAction($Text) { return $script:ConfirmAnswer }
+    function Show-FuInfo($Text, $Icon = 'Information', $Title = '') { [void]$script:Infos.Add(("$Title $Text").Trim()) }
+    function Confirm-FuAction($Text, $Title = '', $Yes = '', [bool]$Danger = $false) { [void]$script:Infos.Add(("$Title $Text").Trim()); return $script:ConfirmAnswer }
 
-    $script:NoUpdateCheck = $true   # no automatic call to GitHub when the test window opens
-    $form = New-MainForm
-    $form.StartPosition = 'Manual'
-    $form.Location = New-Object System.Drawing.Point(-3000, -3000)
-    $form.ShowInTaskbar = $false
-    $form.Show()
-    [System.Windows.Forms.Application]::DoEvents()
-
-    function Find-FuButton([string]$Tab, [string]$Text) {
-        $page = $script:Ui.Tabs.TabPages | Where-Object { $_.Text -eq $Tab }
-        $script:Ui.Tabs.SelectedTab = $page
-        [System.Windows.Forms.Application]::DoEvents()
-        $stack = New-Object System.Collections.Stack
-        $stack.Push($page)
-        while ($stack.Count -gt 0) {
-            $c = $stack.Pop()
-            if ($c -is [System.Windows.Forms.Button] -and $c.Text -eq $Text) { return $c }
-            foreach ($child in $c.Controls) { $stack.Push($child) }
-        }
-        throw "button '$Text' not found on '$Tab'"
+    function Wait-Ui([int]$Ms = 60) {
+        $end = (Get-Date).AddMilliseconds($Ms)
+        do {
+            [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, 'Background')
+            Start-Sleep -Milliseconds 10
+        } while ((Get-Date) -lt $end)
     }
     function Wait-FuJob([int]$Seconds = 120) {
         $end = (Get-Date).AddSeconds($Seconds)
-        while ($script:Job -and (Get-Date) -lt $end) {
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 50
+        Wait-Ui 30
+        while ($script:Tasks.Count -and (Get-Date) -lt $end) { Wait-Ui 40 }
+        Assert (-not $script:Tasks.Count) 'task did not finish in time'
+        Wait-Ui 30
+    }
+    function Click-Ui($Element) {
+        $Element.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    }
+    function Go-Page([string]$Name) {
+        $script:Ui["Nav$Name"].IsChecked = $true
+        Wait-Ui 80
+    }
+    # Every element of a type under a visual
+    function Find-Visuals($Root, [type]$Type) {
+        $stack = New-Object System.Collections.Stack
+        $stack.Push($Root)
+        while ($stack.Count) {
+            $v = $stack.Pop()
+            if ($v -is $Type) { $v }
+            for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($v); $i++) { $stack.Push([Windows.Media.VisualTreeHelper]::GetChild($v, $i)) }
         }
-        Assert (-not $script:Job) 'job did not finish in time'
-        Assert ($script:StatusLabel.Text -ne 'Task failed') ("job failed: " + ($script:Infos -join ' | '))
     }
 
-    Test-Case 'UI: background runspace has Core functions, AppRoot and progress' {
-        $rs = New-FuRunspace
+    $script:NoUpdateCheck = $true   # no automatic call to GitHub when the test window opens
+    $form = New-MainForm
+    $form.WindowStartupLocation = 'Manual'
+    $form.Left = -6000
+    $form.Top = 100
+    $form.ShowInTaskbar = $false
+    $form.ShowActivated = $false
+    $form.Show()
+    Wait-Ui 300
+
+    Test-Case 'UI: window loads in both themes with every control found' {
+        foreach ($n in 'Sheet', 'TaskPill', 'HeroBig', 'CleanGo', 'StartupList', 'ShredGo', 'DiskList', 'ThemeDark', 'CapClose') { Assert $script:Ui[$n] "control $n missing" }
+        foreach ($t in 'Dark', 'Light') {
+            Set-FuTheme $t
+            Assert ((Get-FuEffectiveTheme $t) -eq $t) "theme $t"
+            Assert (Get-FuBrush 'SegmentOn') "colour SegmentOn missing in $t"
+        }
+    }
+
+    Test-Case 'UI: colour files define the same names' {
+        $keys = foreach ($t in 'Light', 'Dark') { ,@([regex]::Matches((Get-Content -LiteralPath (Join-Path $repo "src\Colors.$t.xaml") -Raw), 'x:Key="(\w+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object) }
+        Assert (($keys[0] -join ',') -eq ($keys[1] -join ',')) 'Colors.Light and Colors.Dark differ'
+    }
+
+    Test-Case 'UI: every colour and style the window asks for exists' {
+        $text = (Get-Content -LiteralPath (Join-Path $repo 'src\MainWindow.xaml') -Raw) + (Get-Content -LiteralPath (Join-Path $repo 'src\Theme.xaml') -Raw) + (Get-Content -LiteralPath (Join-Path $repo 'setup\SetupWindow.xaml') -Raw)
+        foreach ($m in [regex]::Matches($text, '\{DynamicResource (\w+)\}')) { Assert (Get-FuBrush $m.Groups[1].Value) "missing colour $($m.Groups[1].Value)" }
+    }
+
+    Test-Case 'UI: background runspace has Core functions, AppRoot and its own progress' {
+        $p = [hashtable]::Synchronized(@{ Text = ''; Percent = -1 })
+        $rs = New-FuRunspace $p
         try {
             $ps = [powershell]::Create()
             $ps.Runspace = $rs
             [void]$ps.AddScript('Set-FuProgress "probe" 42; Write-FuLog "runspace probe"; (Get-Command Get-CleanupTargets).Name')
             $out = @($ps.Invoke())
             Assert ($out -contains 'Get-CleanupTargets') 'Core function missing in runspace'
-            Assert ($script:FuProgress.Text -eq 'probe' -and $script:FuProgress.Percent -eq 42) 'progress not shared'
+            Assert ($p.Text -eq 'probe' -and $p.Percent -eq 42) 'progress not shared'
             Assert ((Get-Content -LiteralPath (Join-Path $tmp 'Logs\freeutil.log') -Raw) -match 'runspace probe') 'runspace did not log to the app log'
         } finally { $rs.Dispose() }
     }
 
-    Test-Case 'UI: Cancel task stops a running task at once' {
-        Start-FuWork 'Sleeping' { Start-Sleep -Seconds 60 } -OnDone { throw 'should not finish' }
-        Start-Sleep -Milliseconds 300
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $script:CancelButton.PerformClick()
-        Wait-FuJob 10
-        Assert ($sw.Elapsed.TotalSeconds -lt 5) "took $($sw.Elapsed.TotalSeconds)s"
-        Assert ($script:StatusLabel.Text -eq 'Cancelled') "status: $($script:StatusLabel.Text)"
+    Test-Case 'UI: background tasks still work after Windows modules were used on the main thread' {
+        # Set-StartupEntryState on the main thread loads ScheduledTasks; Core tests above loaded Storage
+        $null = Get-ScheduledTask -TaskName 'NoSuchTaskXyz' -ErrorAction SilentlyContinue
+        $null = Get-Volume -ErrorAction SilentlyContinue
+        $rs = New-FuRunspace ([hashtable]::Synchronized(@{ Text = ''; Percent = -1 }))
+        try {
+            foreach ($c in '@(Get-Volume).Count', '@(Get-ScheduledTask).Count', '@(Get-PhysicalDisk).Count') {
+                $ps = [powershell]::Create()
+                $ps.Runspace = $rs
+                [void]$ps.AddScript($c)
+                $n = @($ps.Invoke())[0]
+                Assert ($n -gt 0 -and $ps.Streams.Error.Count -eq 0) "$c gave $n, errors: $($ps.Streams.Error -join ' ')"
+                $ps.Dispose()
+            }
+        } finally { $rs.Dispose() }
     }
 
-    Test-Case 'UI: window builds with 12 tabs' { Assert ($script:Ui.Tabs.TabPages.Count -eq 12) "tabs = $($script:Ui.Tabs.TabPages.Count)" }
-
-    Test-Case 'UI: Dashboard Refresh button' {
-        $script:Ui.DashText.Text = ''
-        (Find-FuButton 'Dashboard' 'Refresh').PerformClick()
-        Assert ($script:Ui.DashText.Text -match 'Windows') 'dashboard text empty'
-    }
-
-    Test-Case 'UI: Activity Log Refresh button' {
-        $script:Ui.LogText.Text = ''
-        (Find-FuButton 'Activity Log' 'Refresh').PerformClick()
-        Assert ($script:Ui.LogText.Text -match 'hello from tests') 'log text not shown'
-    }
-
-    Test-Case 'UI: Startup, Services, Programs, Recycle refresh buttons' {
-        (Find-FuButton 'Startup' 'Refresh').PerformClick()
-        Assert ($script:Ui.StartupGrid.Rows.Count -eq @($script:StartupItems).Count) 'startup grid mismatch'
-        (Find-FuButton 'Services' 'Refresh').PerformClick()
-        Assert ($script:Ui.ServiceGrid.Rows.Count -gt 10) 'services grid empty'
-        (Find-FuButton 'Installed Programs' 'Refresh').PerformClick()
-        Assert ($script:Ui.ProgramGrid.Rows.Count -gt 0) 'programs grid empty'
-        (Find-FuButton 'Recover Deleted' 'Refresh').PerformClick()
-        Assert ($script:Ui.RecycleGrid.Rows.Count -eq @($script:RecycleRows).Count) 'recycle grid mismatch'
-    }
-
-    Test-Case 'UI: Disk Health refresh button' {
-        (Find-FuButton 'Disk Health' 'Refresh disks').PerformClick()
-        Assert ($script:Ui.DiskGrid.Rows.Count -ge 1) 'disk grid empty'
-    }
-
-    Test-Case 'UI: Cleanup Scan runs in a background job' {
-        (Find-FuButton 'Cleanup' 'Scan').PerformClick()
-        Assert $script:Job 'no job started'
+    Test-Case 'UI: Home fills in by itself (read-only)' {
         Wait-FuJob
-        Assert ($script:Ui.CleanupList.Items.Count -ge 1) 'cleanup list empty'
+        Wait-Ui 200
+        Assert ($script:Ui.HeroBig.Text -ne [string][char]0x2013) 'hero never updated'
+        Assert ($script:Ui.TileStorageValue.Text -match '\d') "storage tile: $($script:Ui.TileStorageValue.Text)"
+        Assert ($script:Ui.TileMemoryValue.Text -match '% used') "memory tile: $($script:Ui.TileMemoryValue.Text)"
+        Assert ($script:Ui.TileStartupValue.Text -match 'app') "startup tile: $($script:Ui.TileStartupValue.Text)"
+        Assert (@($script:Ui.DriveList.ItemsSource).Count -ge 1) 'no drives'
+        Assert (@($script:Ui.FactList.ItemsSource).Count -eq 5) 'facts missing'
+        Assert (@($script:CleanRows).Count -ge 1) 'scan found nothing'
+        Write-Host ('      hero: ' + $script:Ui.HeroKicker.Text + ' / ' + $script:Ui.HeroBig.Text) -ForegroundColor DarkGray
     }
 
-    Test-Case 'UI: Processes Refresh runs in a background job' {
-        (Find-FuButton 'Processes' 'Refresh').PerformClick()
+    Test-Case 'UI: sidebar shows exactly one page at a time, and every page opens' {
+        foreach ($n in 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings', 'Home') {
+            Go-Page $n
+            $shown = @('Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings' | Where-Object { $script:Ui["Page$_"].Visibility -eq 'Visible' })
+            Assert ($shown.Count -eq 1 -and $shown[0] -eq $n) "$n showed: $($shown -join ',')"
+        }
         Wait-FuJob
-        Assert ($script:Ui.ProcessGrid.Rows.Count -gt 5) 'process grid empty'
     }
 
-    Test-Case 'UI: Duplicates job finds the test copy' {
-        $d = Join-Path $tmp 'uidups'
-        New-TestFile (Join-Path $d 'one.bin') 1200000 3
-        New-TestFile (Join-Path $d 'two.bin') 1200000 3
-        $script:Ui.DupPath.Text = $d
-        (Find-FuButton 'Duplicates' 'Find duplicates').PerformClick()
+    Test-Case 'UI: lists fill and search narrows them' {
+        foreach ($t in @(@('Proc', 'ProcSearch', 'ProcList', 'svchost'), @('Svc', 'SvcSearch', 'SvcList', 'Windows'), @('Apps', 'AppsSearch', 'AppsList', 'Microsoft'))) {
+            Go-Page $t[0]
+            Wait-FuJob
+            $all = @($script:Ui[$t[2]].ItemsSource).Count
+            Assert ($all -gt 0) "$($t[0]) list empty"
+            $script:Ui[$t[1]].Text = $t[3]
+            Wait-Ui 30
+            $some = @($script:Ui[$t[2]].ItemsSource).Count
+            Assert ($some -le $all) "$($t[0]) search grew the list"
+            $script:Ui[$t[1]].Text = 'no-such-thing-xyz'
+            Wait-Ui 30
+            Assert (@($script:Ui[$t[2]].ItemsSource).Count -eq 0) "$($t[0]) search did not empty the list"
+            Assert ($script:Ui["$($t[0])Empty"].Visibility -eq 'Visible') "$($t[0]) empty message hidden"
+            $script:Ui[$t[1]].Text = ''
+            Wait-Ui 30
+            Assert (@($script:Ui[$t[2]].ItemsSource).Count -eq $all) "$($t[0]) search did not restore"
+        }
+    }
+
+    Test-Case 'UI: Clean is off until something is ticked; a tick really changes the total' {
+        Go-Page 'Cleanup'
         Wait-FuJob
-        Assert (@($script:DupRows).Count -eq 1) "dup rows = $(@($script:DupRows).Count)"
-        Assert ($script:Ui.DupGrid.Rows.Count -eq 1) 'dup grid not filled'
+        Wait-Ui 150
+        $box = @(Find-Visuals $script:Ui.ListSafe ([Windows.Controls.CheckBox]) | Where-Object { $_.IsEnabled })[0]
+        Assert $box 'no tickable row'
+        $row = $box.DataContext
+        $was = [bool]$row.Selected
+        $box.IsChecked = (-not $was)
+        Click-Ui $box
+        Wait-Ui 30
+        Assert ([bool]$row.Selected -ne $was) 'the tick did not reach the row'
+        foreach ($r in $script:CleanRows) { $r.Selected = $false }
+        Update-FuCleanTotal
+        Assert (-not $script:Ui.CleanGo.IsEnabled) 'Clean enabled with nothing ticked'
+        Assert ($script:Ui.CleanTotal.Text -eq 'Nothing selected') "total: $($script:Ui.CleanTotal.Text)"
     }
 
-    Test-Case 'UI: Large Files job fills the grid' {
-        $script:Ui.LargePath.Text = Join-Path $tmp 'large'
-        (Find-FuButton 'Large Files' 'Find 200 largest files').PerformClick()
-        Wait-FuJob
-        Assert ($script:Ui.LargeGrid.Rows.Count -eq 2) "large rows = $($script:Ui.LargeGrid.Rows.Count)"
-    }
-
-    Test-Case 'UI: Secure Delete button shreds the chosen file' {
-        $f = Join-Path $tmp 'uishred\x.txt'
-        New-TestFile $f 100
-        $script:Ui.ShredPath.Text = $f
-        (Find-FuButton 'Secure Delete' 'Shred file permanently').PerformClick()
-        Assert (-not (Test-Path -LiteralPath $f)) 'file still there'
-        Assert ($script:Ui.ShredPath.Text -eq '') 'path box not cleared'
-    }
-
-    Test-Case 'UI: Clean ticked locations runs Invoke-Cleanup in a job' {
+    Test-Case 'UI: Clean removes only the ticked test folder and reports it' {
         $d = Join-Path $tmp 'uiclean'
-        New-TestFile (Join-Path $d 'junk.tmp') 100
-        $script:CleanupRows = @([pscustomobject]@{ Id = 't'; Target = 'Test'; Path = $d; Files = 1; MB = 0; Bytes = 100; NeedsAdmin = $false })
-        $script:Ui.CleanupList.Items.Clear()
-        [void]$script:Ui.CleanupList.Items.Add('Test')
-        $script:Ui.CleanupList.SetItemChecked(0, $true)
-        $script:Infos.Clear()
-        (Find-FuButton 'Cleanup' 'Clean ticked locations').PerformClick()
-        Wait-FuJob
+        New-TestFile (Join-Path $d 'junk.tmp') 2000000
+        $source = New-CleanupRow 't' 'Test files (for the test)' @(New-FuPart $d) $false
+        $script:CleanRows = @(ConvertTo-FuCleanRow $source $false @())
+        Update-FuCleanTotal
+        Assert ($script:Ui.CleanTotal.Text -match '2 MB selected') "total: $($script:Ui.CleanTotal.Text)"
+        Assert ($script:Ui.CleanGo.IsEnabled) 'Clean disabled'
+        $script:ConfirmAnswer = $false
+        Click-Ui $script:Ui.CleanGo
+        Wait-Ui 50
+        Assert (Test-Path -LiteralPath (Join-Path $d 'junk.tmp')) 'cleaned although the answer was Cancel'
+        $script:ConfirmAnswer = $true
+        Click-Ui $script:Ui.CleanGo
+        Wait-Ui 100
+        $toast = $null
+        $end = (Get-Date).AddSeconds(30)
+        while (-not $toast -and (Get-Date) -lt $end) {
+            Wait-Ui 30
+            if ($script:Ui.TaskText.Text -match 'Freed') { $toast = $script:Ui.TaskText.Text }
+        }
+        Assert $toast 'no result message'
+        Assert ($toast -match 'Removed 1 file') "message: $toast"
         Assert (-not (Test-Path -LiteralPath (Join-Path $d 'junk.tmp'))) 'file not cleaned'
-        Assert (($script:Infos -join ' ') -match 'Deleted 1 files') ("result message: " + ($script:Infos -join ' | '))
-        Assert ((Get-Content -LiteralPath (Join-Path $tmp 'Logs\freeutil.log') -Raw) -match 'Cleanup: deleted 1 files') 'job did not log to the app log'
+        Assert ((Get-Content -LiteralPath (Join-Path $tmp 'Logs\freeutil.log') -Raw) -match 'Cleanup: deleted 1 files') 'not logged'
         Wait-FuJob   # the re-scan that follows
     }
 
-    Test-Case 'UI: Optimize now runs the auto-clean and reports what it freed' {
-        # Stand-in, so the test does not clean this PC; the background runspace picks it up
-        function Invoke-AutoClean([string]$Reason) { [pscustomobject]@{ FreedMB = 12.5; Deleted = 40; Skipped = 2; Items = 3; LeftForOpenPrograms = @('Google Chrome cache') } }
+    Test-Case 'UI: privacy and open-app rows are never ticked, and cost an extra question' {
+        $d = Join-Path $tmp 'uipriv'
+        New-TestFile (Join-Path $d 'History') 100
+        $priv = New-CleanupRow 'p' 'Test history (privacy)' @(New-FuPart $d) $false $false 'Files' @() $true
+        $open = New-CleanupRow 'o' 'Test App cache' @(New-FuPart $d) $false $true 'Files' @('powershell')
+        $locked = New-CleanupRow 'l' 'Windows thing' @(New-FuPart $d) $true $true
+        $rows = @(ConvertTo-FuCleanRow $priv $false @('powershell')), @(ConvertTo-FuCleanRow $open $false @('powershell')), @(ConvertTo-FuCleanRow $locked $false @())
+        Assert (-not $rows[0][0].Selected -and $rows[0][0].Section -eq 'Privacy') 'privacy row ticked'
+        Assert (-not $rows[1][0].Selected -and $rows[1][0].TagText -eq 'Open') 'open-app row ticked'
+        Assert (-not $rows[2][0].CanClean -and $rows[2][0].Section -eq 'Admin') 'locked row can be ticked'
+        $rows[0][0].Selected = $true
+        $script:CleanRows = @($rows[0][0])
         $script:Infos.Clear()
-        (Find-FuButton 'Dashboard' 'Optimize now').PerformClick()
-        Wait-FuJob
-        $msg = $script:Infos -join ' '
-        Assert ($msg -match 'Freed 12.5 MB' -and $msg -match 'Google Chrome cache') "message: $msg"
-        Remove-Item Function:\Invoke-AutoClean
+        $script:ConfirmAnswer = $false
+        Start-FuCleanSelected
+        Assert (($script:Infos -join ' ') -match 'signs you out') "no privacy warning: $($script:Infos -join ' | ')"
+        $script:ConfirmAnswer = $true
+        Assert (Test-Path -LiteralPath (Join-Path $d 'History')) 'privacy item cleaned after Cancel'
     }
 
-    Test-Case 'UI: weekly reminder asks when due, and "No" waits a week' {
-        Set-FuSetting 'WeeklyReminder' $true
-        Set-FuSetting 'LastCleanup' (Get-Date).AddDays(-9)
-        Set-FuSetting 'LastReminder' $null
+    Test-Case 'UI: Clean Now runs one-click cleanup and shows what it freed' {
+        function Invoke-AutoClean([string]$Reason) { [pscustomobject]@{ FreedMB = 2048; Deleted = 40; Skipped = 2; Items = 3; LeftForOpenPrograms = @() } }
+        function Get-CleanupTargets { }   # the re-scan afterwards finds nothing
+        Go-Page 'Home'
+        $script:Ui.HeroClean.Visibility = 'Visible'
         $script:ConfirmAnswer = $false
-        $started = & $script:Ui.ReminderCheck
+        Click-Ui $script:Ui.HeroClean
+        Assert (-not $script:Tasks.Count) 'started although the answer was Cancel'
         $script:ConfirmAnswer = $true
-        Assert (-not $started -and -not $script:Job) 'cleanup started after No'
-        Assert (-not (Test-FuCleanupDue)) 'would ask again straight away'
-        Assert ($script:Ui.CleanupWeekly.Checked) 'reminder checkbox not shown as on'
+        Click-Ui $script:Ui.HeroClean
+        Wait-FuJob
+        Assert ($script:Ui.HeroKicker.Text -eq 'All done') "kicker: $($script:Ui.HeroKicker.Text)"
+        Assert ($script:Ui.HeroBig.Text -eq '2.0 GB') "big: $($script:Ui.HeroBig.Text)"
+        Assert ($script:Ui.HeroSub.Text -match '40 files removed, 2 in use') "sub: $($script:Ui.HeroSub.Text)"
+    }
+
+    Test-Case 'UI: hero says All tidy when nothing is worth cleaning, and names open apps' {
+        $script:CleanRows = @()
+        Update-FuHeroFromScan
+        Assert ($script:Ui.HeroBig.Text -eq 'All tidy') "big: $($script:Ui.HeroBig.Text)"
+        Assert ($script:Ui.HeroClean.Visibility -ne 'Visible') 'Clean Now offered with nothing to clean'
+        $source = [pscustomobject]@{ Target = 'Brave cache'; Bytes = 900MB; Files = 10; Recommended = $true; NeedsAdmin = $false; Privacy = $false; Process = @('brave'); Kind = 'Files' }
+        $script:CleanRows = @(ConvertTo-FuCleanRow $source $false @('brave'))
+        Update-FuHeroFromScan
+        Assert ($script:Ui.HeroSub.Text -match 'Close Brave to clean 900 MB more') "sub: $($script:Ui.HeroSub.Text)"
+    }
+
+    Test-Case 'UI: a task can be cancelled at once, and two changes cannot run together' {
+        Start-FuWork 'Sleeping' { Start-Sleep -Seconds 60 } -Exclusive -OnDone { throw 'should not finish' }
+        Wait-Ui 200
+        Assert ($script:Ui.TaskPill.Visibility -eq 'Visible') 'no status pill'
+        $script:Infos.Clear()
+        Start-FuWork 'Second' { 1 } -Exclusive
+        Assert (($script:Infos -join ' ') -match 'still running') 'second change was allowed'
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        Click-Ui $script:Ui.TaskCancel
+        Wait-FuJob 10
+        Assert ($sw.Elapsed.TotalSeconds -lt 5) "took $($sw.Elapsed.TotalSeconds)s"
+        Assert ($script:Ui.TaskText.Text -eq 'Cancelled') "status: $($script:Ui.TaskText.Text)"
+    }
+
+    Test-Case 'UI: a failed task explains itself; a quiet one stays quiet' {
+        $script:Infos.Clear()
+        Start-FuWork 'Testing' { throw 'boom' }
+        Wait-FuJob
+        Assert (($script:Infos -join ' ') -match 'boom') "message: $($script:Infos -join ' | ')"
+        $script:Infos.Clear()
+        Start-FuWork 'Testing' { throw 'boom' } -Quiet
+        Wait-FuJob
+        Assert ($script:Infos.Count -eq 0) 'quiet task spoke'
+    }
+
+    Test-Case 'UI: Duplicates finds the test copy; selecting it enables the button' {
+        $d = Join-Path $tmp 'uidups'
+        New-TestFile (Join-Path $d 'one.bin') 1200000 3
+        New-TestFile (Join-Path $d 'two.bin') 1200000 3
+        Go-Page 'Dup'
+        $script:Ui.DupPath.Text = $d
+        Click-Ui $script:Ui.DupFind
+        Wait-FuJob
+        Assert (@($script:DupRows).Count -eq 1) "rows: $(@($script:DupRows).Count)"
+        Assert (-not $script:Ui.DupBin.IsEnabled) 'bin button on with nothing selected'
+        $script:Ui.DupList.SelectedIndex = 0
+        Wait-Ui 30
+        Assert ($script:Ui.DupBin.IsEnabled) 'bin button off with a row selected'
+        $script:Infos.Clear()
+        $script:Ui.DupPath.Text = Join-Path $tmp 'nope'
+        Click-Ui $script:Ui.DupFind
+        Assert (($script:Infos -join ' ') -match "doesn't exist") 'bad folder accepted'
+    }
+
+    Test-Case 'UI: Large Files fills the list' {
+        Go-Page 'Large'
+        $script:Ui.LargePath.Text = Join-Path $tmp 'large'
+        Click-Ui $script:Ui.LargeFind
+        Wait-FuJob
+        Assert (@($script:LargeRows).Count -eq 2) "rows: $(@($script:LargeRows).Count)"
+        Assert ($script:LargeRows[0].Title -eq 'big.bin') "first: $($script:LargeRows[0].Title)"
+        $script:Ui.LargeList.SelectedIndex = 0
+        Wait-Ui 30
+        Assert ($script:Ui.LargeReveal.IsEnabled -and $script:Ui.LargeBin.IsEnabled) 'buttons off with a row selected'
+    }
+
+    Test-Case 'UI: Startup switch applies, puts itself back when refused, and protects antivirus' {
+        try {
+            $locs = New-TestStartupLocations
+            function Get-StartupEntries { }
+            Go-Page 'Startup'
+            Update-FuStartupRows @(& (Get-Command Get-StartupEntries -CommandType Function) ) # empty first: no real entries in this test
+            $real = ${function:Get-StartupEntries}
+            $entries = @($locs | ForEach-Object { $_ })  # keep PowerShell from unrolling the tables
+            Remove-Item Function:\Get-StartupEntries
+            Update-FuStartupRows @(Get-StartupEntries -Locations $entries -NoTasks)
+            Wait-Ui 150
+            $row = $script:StartupRows | Where-Object { $_.Name -eq 'Fake App' }
+            Assert ($row.IsOn) 'not on at the start'
+            $av = $script:StartupRows | Where-Object { $_.Name -eq 'Norton Fake' }
+            Assert (-not $av.CanChange -and $av.TagText -eq 'Protected') 'antivirus switch is not locked'
+            $toggles = @(Find-Visuals $script:Ui.StartupList ([Windows.Controls.Primitives.ToggleButton]))
+            $t = $toggles | Where-Object { $_.DataContext.Name -eq 'Fake App' }
+            Assert $t 'no switch for the row'
+            $t.IsChecked = $false
+            Click-Ui $t
+            Wait-Ui 30
+            $flag = (Get-Item -LiteralPath $row.Entry.ApprovedKey).GetValue('Fake App')
+            Assert ($flag[0] -eq 3) 'flag not set off'
+            Assert (-not $row.IsOn) 'row not updated'
+            Assert ($script:Ui.TaskText.Text -match "won't start") "toast: $($script:Ui.TaskText.Text)"
+            $t.IsChecked = $true
+            Click-Ui $t
+            Wait-Ui 30
+            Assert ((Get-Item -LiteralPath $row.Entry.ApprovedKey).GetValue('Fake App')[0] -eq 2) 'flag not set on'
+            if (-not (Test-FuAdmin)) {
+                # An all-users entry without admin rights: the question is refused, so the switch goes back
+                $row.Entry.Scope = 'All users'
+                $script:ConfirmAnswer = $false
+                $t.IsChecked = $false
+                Click-Ui $t
+                Wait-Ui 30
+                $script:ConfirmAnswer = $true
+                Assert ([bool]$t.IsChecked) 'switch did not go back'
+                Assert ((Get-Item -LiteralPath $row.Entry.ApprovedKey).GetValue('Fake App')[0] -eq 2) 'entry changed without rights'
+            }
+        } finally {
+            Remove-Item -Path 'HKCU:\Software\MakatoolsTest' -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case 'UI: End Process refuses antivirus; Services enable the right button' {
+        Go-Page 'Proc'
+        Wait-FuJob
+        $script:ProcRows = @([pscustomobject]@{ Name = 'NortonSvc'; Id = -1; Path = 'C:\Program Files\Norton\x.exe'; Threads = 1; MemoryText = '1 MB'; MemoryShare = 1 })
+        Update-FuProcFilter
+        $script:Ui.ProcList.SelectedIndex = 0
+        Wait-Ui 30
+        $script:Infos.Clear()
+        Click-Ui $script:Ui.ProcEnd
+        Assert (($script:Infos -join ' ') -match 'antivirus') "message: $($script:Infos -join ' | ')"
+        Go-Page 'Svc'
+        Wait-FuJob
+        $script:Ui.SvcSearch.Text = ''
+        $r = @($script:SvcRows | Where-Object { $_.Status -eq 'Running' })[0]
+        $script:Ui.SvcList.SelectedItem = $r
+        Wait-Ui 30
+        Assert ($script:Ui.SvcStop.IsEnabled -and -not $script:Ui.SvcStart.IsEnabled) 'wrong buttons for a running service'
+    }
+
+    Test-Case 'UI: Recover opens, Disk Health fills, Log shows changes' {
+        Go-Page 'Recover'
+        Wait-FuJob
+        $script:Ui.RecoverSearch.Text = 'no-such-file-xyz'
+        Wait-Ui 30
+        Assert (@($script:Ui.RecoverList.ItemsSource).Count -eq 0) 'search did not filter'
+        Assert ($script:Ui.RecoverEmpty.Visibility -eq 'Visible') 'empty message hidden'
+        $script:Ui.RecoverSearch.Text = ''
+        Go-Page 'Disk'
+        Wait-FuJob
+        Assert (@($script:Ui.DiskList.ItemsSource).Count -ge 1) 'no disk cards'
+        Assert ($script:Ui.VolumePick.Children.Count -ge 1) 'no drives to pick'
+        Assert (Get-FuPickedVolume) 'no drive picked'
+        Go-Page 'Log'
+        Assert (@($script:Ui.LogList.ItemsSource).Count -ge 1) 'log empty'
+        Assert ($script:Ui.LogList.ItemsSource[0].When -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$') "when: $($script:Ui.LogList.ItemsSource[0].When)"
+    }
+
+    Test-Case 'UI: Secure Delete asks first, then shreds the chosen file' {
+        $f = Join-Path $tmp 'uishred\x.txt'
+        New-TestFile $f 100
+        Go-Page 'Shred'
+        Assert (-not $script:Ui.ShredGo.IsEnabled) 'delete button on with no file'
+        Set-FuShredFile $f
+        Assert ($script:Ui.ShredGo.IsEnabled -and $script:Ui.ShredName.Text -eq 'x.txt') 'file not shown'
+        $script:ConfirmAnswer = $false
+        Click-Ui $script:Ui.ShredGo
+        Wait-Ui 50
+        Assert (Test-Path -LiteralPath $f) 'shredded although the answer was Cancel'
+        $script:ConfirmAnswer = $true
+        Click-Ui $script:Ui.ShredGo
+        Wait-FuJob
+        Assert (-not (Test-Path -LiteralPath $f)) 'file still there'
+        Assert (-not $script:Ui.ShredGo.IsEnabled -and $script:Ui.ShredName.Text -eq 'Drop a file here') 'page not reset'
+        Assert ($script:Ui.TaskText.Text -match 'overwritten and deleted') "toast: $($script:Ui.TaskText.Text)"
+    }
+
+    Test-Case 'UI: Settings changes the theme live and remembers it' {
+        Go-Page 'Settings'
+        $light = (Get-FuBrush 'Page').Color
+        $script:Ui.ThemeDark.IsChecked = $true
+        Click-Ui $script:Ui.ThemeDark
+        Wait-Ui 30
+        Assert ((Get-FuSettings).Appearance -eq 'Dark') 'not saved'
+        Assert ((Get-FuBrush 'Page').Color.ToString() -eq '#FF1C1C1E') "page colour: $((Get-FuBrush 'Page').Color)"
+        $script:Ui.ThemeLight.IsChecked = $true
+        Click-Ui $script:Ui.ThemeLight
+        Wait-Ui 30
+        Assert ((Get-FuBrush 'Page').Color.ToString() -eq '#FFF5F5F7') 'light theme not back'
+        $script:Ui.ReminderSwitch.IsChecked = $false
+        Click-Ui $script:Ui.ReminderSwitch
+        Assert ((Get-FuSettings).WeeklyReminder -eq $false) 'reminder not saved'
+        $script:Ui.ReminderSwitch.IsChecked = $true
+        Click-Ui $script:Ui.ReminderSwitch
+        Assert ($script:Ui.AboutVersion.Text -match [regex]::Escape((Get-FuVersion))) 'version not shown'
+    }
+
+    Test-Case 'UI: the real in-window dialog answers Yes, No and Escape' {
+        foreach ($case in @(@('SheetYes', $true), @('SheetNo', $false))) {
+            $script:SheetTest = $case[0]
+            $t = New-Object Windows.Threading.DispatcherTimer
+            $t.Interval = [TimeSpan]::FromMilliseconds(150)
+            $t.Add_Tick({ param($s) $s.Stop(); Click-Ui $script:Ui[$script:SheetTest] })
+            $t.Start()
+            $answer = Show-FuSheet -Title 'Test' -Text 'Body' -Yes 'Yes' -No 'No' -Kind 'danger'
+            Assert ($answer -eq $case[1]) "$($case[0]) gave $answer"
+            Assert ($script:Ui.Sheet.Visibility -ne 'Visible') 'dialog still showing'
+        }
+        Assert (-not $script:Ui.SheetYes.IsDefault) 'Enter would confirm a destructive question'
     }
 
     Test-Case 'UI: update check - not set up, offline (quiet and manual), up to date' {
-        # Stand-ins, so the test does not depend on GitHub; the background runspace picks them up
         function Get-FuUpdateRepo { '' }
         $script:Infos.Clear()
-        (Find-FuButton 'Dashboard' 'Check for updates').PerformClick()
+        Click-Ui $script:Ui.SettingsUpdate
         Assert (($script:Infos -join ' ') -match 'not set up') "not set up: $($script:Infos -join ' ')"
 
         function Get-FuUpdateRepo { 'example/repo' }
         function Find-FuUpdate { throw 'No such host is known.' }
         $script:Infos.Clear()
-        & $script:Ui.UpdateCheck $true
+        Start-FuUpdateCheck $true
         Wait-FuJob
         Assert ($script:Infos.Count -eq 0) "quiet check spoke: $($script:Infos -join ' ')"
-        (Find-FuButton 'Dashboard' 'Check for updates').PerformClick()
+        Click-Ui $script:Ui.SettingsUpdate
         Wait-FuJob
-        Assert (($script:Infos -join ' ') -match 'Could not check for updates') "manual offline: $($script:Infos -join ' ')"
+        Assert (($script:Infos -join ' ') -match "Couldn't check for updates") "manual offline: $($script:Infos -join ' ')"
 
         function Find-FuUpdate { $null }
         $script:Infos.Clear()
-        (Find-FuButton 'Dashboard' 'Check for updates').PerformClick()
+        Click-Ui $script:Ui.SettingsUpdate
         Wait-FuJob
-        Assert (($script:Infos -join ' ') -match 'latest version') "up to date: $($script:Infos -join ' ')"
-        Remove-Item Function:\Get-FuUpdateRepo, Function:\Find-FuUpdate
-        . (Join-Path $repo 'src\Core.ps1')   # put the real functions back
+        Assert (($script:Infos -join ' ') -match 'up to date') "up to date: $($script:Infos -join ' ')"
     }
 
-    Test-Case 'UI: Startup tab has Switch off / Switch on, and the window scales by DPI' {
-        $null = Find-FuButton 'Startup' 'Switch off'
-        $null = Find-FuButton 'Startup' 'Switch on'
-        Assert ([string]$form.AutoScaleMode -eq 'Dpi') "AutoScaleMode $($form.AutoScaleMode)"
-        Assert ($form.Text -eq "Makatools $(Get-FuVersion)") "title: $($form.Text)"
+    Test-Case 'UI: a new version shows the button and asks; a blocked update offers the download page' {
+        $script:Sheets = New-Object System.Collections.ArrayList
+        $script:SheetAnswer = $false
+        function Show-FuSheet { param($Title, $Text, $Yes, $No, $Kind) [void]$script:Sheets.Add($Title); return $script:SheetAnswer }
+        function Get-FuUpdateRepo { 'example/repo' }
+        function Find-FuUpdate { [pscustomobject]@{ Version = '9.9.9'; Url = 'x'; Sha256 = 'x'; Notes = 'New things'; Page = 'x' } }
+        Start-FuUpdateCheck $true
+        Wait-FuJob
+        Assert ($script:Ui.UpdateChip.Visibility -eq 'Visible') 'no update button'
+        Assert ([string]$script:Ui.UpdateChip.Content -match '9\.9\.9') "button: $($script:Ui.UpdateChip.Content)"
+        Assert (($script:Sheets -join ' ') -match '9\.9\.9 is ready') "asked: $($script:Sheets -join ' | ')"
+        Assert (-not $script:Tasks.Count) 'downloaded although the answer was Later'
+
+        # Update Now, but antivirus removed the download: the app stays open and offers the page
+        function Save-FuUpdate($Update, $Folder) { Join-Path $Folder 'gone.exe' }
+        $script:Sheets.Clear()
+        $script:SheetAnswer = $true
+        Confirm-FuUpdate ([pscustomobject]@{ Version = '9.9.9'; Url = 'x'; Sha256 = 'x'; Notes = '' })
+        $script:SheetAnswer = $false      # "Not now" on the fallback, so no browser opens
+        Wait-FuJob
+        Assert (($script:Sheets -join ' ') -match "didn't start") "fallback: $($script:Sheets -join ' | ')"
+        Assert ($script:Ui.Window.IsVisible) 'window closed'
+        Set-FuShown $script:Ui.UpdateChip $false
     }
 
     $form.Close()
-    $form.Dispose()
 }
 
 # ---------------------------------------------------------------- done

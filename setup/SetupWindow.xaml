@@ -1,0 +1,42 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Makatools Setup" Width="500" Height="470" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Page}"
+        FontFamily="{StaticResource UiFont}" FontSize="13.5" Foreground="{DynamicResource Ink}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="34" ResizeBorderThickness="0" CornerRadius="0"
+                        GlassFrameThickness="0,0,0,1" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+
+  <Grid x:Name="Root" Background="{DynamicResource Page}">
+    <Button x:Name="CloseX" Style="{StaticResource CaptionClose}" Content="&#xE8BB;" HorizontalAlignment="Right" VerticalAlignment="Top"
+            shell:WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Close" AutomationProperties.Name="Close"/>
+
+    <DockPanel Margin="44,44,44,32">
+      <!-- buttons -->
+      <Grid DockPanel.Dock="Bottom">
+        <Button x:Name="GoButton" Style="{StaticResource Primary}" Content="Install" MinHeight="38" FontSize="14.5" IsDefault="True"/>
+        <Button x:Name="OpenButton" Style="{StaticResource Primary}" Content="Open Makatools" MinHeight="38" FontSize="14.5" Visibility="Collapsed"/>
+        <Button x:Name="DoneButton" Style="{StaticResource Secondary}" Content="Close" MinHeight="38" FontSize="14.5" Visibility="Collapsed"/>
+      </Grid>
+
+      <StackPanel VerticalAlignment="Top">
+        <Grid HorizontalAlignment="Center" Width="96" Height="96">
+          <Image x:Name="Logo" Width="96" Height="96" RenderOptions.BitmapScalingMode="HighQuality"/>
+          <Border x:Name="DoneBadge" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource Green}" BorderBrush="{DynamicResource Page}" BorderThickness="3"
+                  HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-4,-4" Visibility="Collapsed">
+            <TextBlock Text="&#xE73E;" Style="{StaticResource Glyph}" FontSize="13" FontWeight="Bold" Foreground="White"/>
+          </Border>
+        </Grid>
+        <TextBlock x:Name="HeadTitle" Text="Install Makatools" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,18,0,0" TextOptions.TextFormattingMode="Ideal"/>
+        <TextBlock x:Name="HeadSub" Text="Version" Foreground="{DynamicResource Ink2}" FontSize="13" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+        <TextBlock x:Name="BodyText" Style="{StaticResource Body}" TextAlignment="Center" Margin="0,16,0,0"
+                   Text="Free tools to clean up, speed up and look after your PC. Installs for your account only, so no administrator rights are needed."/>
+        <ProgressBar x:Name="WorkBar" Style="{StaticResource Bar}" IsIndeterminate="True" Margin="30,22,30,0" Visibility="Collapsed"/>
+        <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Red}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" Margin="0,12,0,0" Visibility="Collapsed"/>
+      </StackPanel>
+    </DockPanel>
+  </Grid>
+</Window>

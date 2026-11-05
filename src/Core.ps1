@@ -5,7 +5,7 @@ if (-not $script:AppRoot) { $script:AppRoot = Split-Path -Parent $PSScriptRoot }
 
 # The version, and the GitHub repository ("owner/name") whose releases the update check reads.
 # These are functions so background tasks get them too. An empty repository turns updates off.
-function Get-FuVersion { '2.1.0' }
+function Get-FuVersion { '2.2.0' }
 function Get-FuUpdateRepo { 'onlyilir/makatools' }
 
 # ---------------------------------------------------------------- environment
@@ -104,6 +104,58 @@ function Get-SystemSummary {
             $v.DriveLetter, ($v.SizeRemaining / 1GB), ($v.Size / 1GB), $v.FileSystemType, $v.HealthStatus)
     }
     return ($lines -join "`r`n")
+}
+
+# The same facts as Get-SystemSummary, as data for the Home screen
+function Get-SystemInfo {
+    $os  = Get-CimInstance Win32_OperatingSystem
+    $cs  = Get-CimInstance Win32_ComputerSystem
+    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $up  = (Get-Date) - $os.LastBootUpTime
+    $total = [double]$cs.TotalPhysicalMemory
+    $free  = [double]$os.FreePhysicalMemory * 1KB
+    $sysDrive = $env:SystemDrive.Substring(0, 1)
+    [pscustomobject]@{
+        Computer   = [string]$cs.Name
+        Windows    = ('{0} ({1})' -f ([string]$os.Caption -replace '^Microsoft\s+', ''), $os.Version)
+        Processor  = ([string]$cpu.Name).Trim()
+        MemoryText = Format-FuSize $total
+        MemoryBytes = $total
+        MemoryUsed = ($total - $free)
+        Uptime     = ('{0} days, {1} hours' -f $up.Days, $up.Hours)
+        Antivirus  = @(Get-AntivirusStatus | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled } })
+        SystemDrive = $sysDrive
+        Volumes    = @(Get-UsableVolumes | ForEach-Object {
+            [pscustomobject]@{
+                Letter = [string]$_.DriveLetter
+                Label  = [string]$_.FileSystemLabel
+                Size   = [double]$_.Size
+                Free   = [double]$_.SizeRemaining
+                Health = [string]$_.HealthStatus
+            }
+        })
+    }
+}
+
+# "824 MB", "2.3 GB": sizes as people read them
+function Format-FuSize([double]$Bytes) {
+    if ($Bytes -lt 1KB) { return ('{0:N0} bytes' -f $Bytes) }
+    if ($Bytes -lt 1MB) { return ('{0:N0} KB' -f ($Bytes / 1KB)) }
+    if ($Bytes -lt 1GB) { return ('{0:N0} MB' -f ($Bytes / 1MB)) }
+    if ($Bytes -lt 1TB) { return ('{0:N1} GB' -f ($Bytes / 1GB)) }
+    return ('{0:N1} TB' -f ($Bytes / 1TB))
+}
+
+# The activity log as rows, newest first
+function Get-FuLogEntries([int]$Lines = 300) {
+    $path = Get-FuLogPath
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    $all = @(Get-Content -LiteralPath $path -Tail $Lines)
+    for ($i = $all.Count - 1; $i -ge 0; $i--) {
+        if ($all[$i] -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}):\d{2} \[\w+\] (.*)$') {
+            [pscustomobject]@{ When = $Matches[1]; Message = $Matches[2] }
+        }
+    }
 }
 
 # Volumes that are mounted and have a size (skips empty card readers and unmounted drives)
@@ -593,6 +645,7 @@ function Get-LargeFiles([string]$Root, [int]$Top = 200) {
         ForEach-Object {
             [pscustomobject]@{
                 MB     = [math]::Round($_.Length / 1MB, 1)
+                Bytes  = $_.Length
                 Name   = $_.Name
                 Folder = $_.DirectoryName
                 Path   = $_.FullName

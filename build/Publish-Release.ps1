@@ -3,7 +3,7 @@
 #   powershell -ExecutionPolicy Bypass -File build\Publish-Release.ps1 [-Notes "What changed"] [-DryRun]
 # It refuses to publish unless the working tree is clean, the version is new, and every test passes.
 # -DryRun does all the checks and the build, but uploads nothing.
-param([string]$Notes = '', [switch]$DryRun)
+param([string]$Notes = '', [string]$NotesFile = '', [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $root
@@ -37,15 +37,21 @@ Write-Output 'Running tests...'
 & $ps -NoProfile -ExecutionPolicy Bypass -File 'tests\Run-Tests.ps1' | Select-Object -Last 1
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Nothing was published.' }
 Write-Output 'Building...'
-& $ps -NoProfile -ExecutionPolicy Bypass -File 'build\Build-Bundle.ps1' | Out-Null
+& $ps -NoProfile -ExecutionPolicy Bypass -File 'build\Build.ps1' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Build failed. Nothing was published.' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File 'tests\Test-Setup.ps1' -SetupExe 'dist\Makatools-Setup.exe' | Select-Object -Last 1
 if ($LASTEXITCODE -ne 0) { throw 'The built Setup.exe failed its install tests. Nothing was published.' }
 
-if ($DryRun) { Write-Output "Dry run finished: $tag would be published with dist\Makatools-Setup.exe and dist\Makatools.zip."; return }
+$zip = "dist\Makatools-$version-portable.zip"
+if ($DryRun) { Write-Output "Dry run finished: $tag would be published with dist\Makatools-Setup.exe and $zip."; return }
 
 if (-not $Notes) { $Notes = "Makatools $version. Install or update by running Makatools-Setup.exe. Installed copies offer this update automatically." }
+if ($NotesFile) { $Notes = [IO.File]::ReadAllText($NotesFile) }
+$notesPath = Join-Path $env:TEMP "makatools-notes-$PID.md"
+[IO.File]::WriteAllText($notesPath, $Notes)
 if ((Invoke-Tool git push origin HEAD) -ne 0) { throw 'Could not push the code to GitHub. Nothing was published.' }
-if ((Invoke-Tool $gh release create $tag 'dist\Makatools-Setup.exe' 'dist\Makatools.zip' --repo $repo --title "Makatools $version" --notes $Notes --latest) -ne 0) { throw 'GitHub refused the release.' }
+$made = Invoke-Tool $gh release create $tag 'dist\Makatools-Setup.exe' $zip --repo $repo --title "Makatools $version" --notes-file $notesPath --latest
+Remove-Item -LiteralPath $notesPath -ErrorAction SilentlyContinue
+if ($made -ne 0) { throw 'GitHub refused the release.' }
 [void](Invoke-Tool git fetch --tags)
 Write-Output "Published https://github.com/$repo/releases/tag/$tag"
