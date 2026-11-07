@@ -42,6 +42,8 @@ Makatools isn't code-signed yet, so the first time you download and run it:
 
 Light and dark mode follow Windows, or choose in Settings.
 
+![Protection page](docs/protection.png)
+
 ![Cleanup in dark mode](docs/cleanup-dark.png)
 
 ### What Cleanup removes
