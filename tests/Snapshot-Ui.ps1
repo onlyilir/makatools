@@ -1,5 +1,5 @@
 # Renders every screen of the real window to PNG files, off-screen, without changing anything.
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\Snapshot-Ui.ps1 -OutDir <folder> [-Theme Light|Dark] [-Scale 1.5] [-RealData] [-Pages Home,Startup]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\Snapshot-Ui.ps1 -OutDir <folder> [-Theme Light|Dark] [-Scale 1.5] [-RealData] [-Pages Home,Startup] [-ProtectionMode Defender|Other|Off]
 # By default the screens show made-up sample data, so the pictures are safe to publish.
 param(
     [Parameter(Mandatory)][string]$OutDir,
@@ -8,7 +8,8 @@ param(
     [int]$Width = 0,
     [int]$Height = 0,
     [switch]$RealData,
-    [string[]]$Pages = @('Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings')
+    [string[]]$Pages = @('Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Protect', 'Disk', 'Log', 'Settings'),
+    [ValidateSet('Defender', 'Other', 'Off')][string]$ProtectionMode = 'Defender'
 )
 $ErrorActionPreference = 'Stop'
 $Pages = @($Pages -split ',')   # -File passes a comma list as one string
@@ -87,6 +88,19 @@ if (-not $RealData) {
     function Get-DiskHealth {
         [pscustomobject]@{ Disk = 'NVMe SSD 2TB'; Type = 'SSD'; SizeGB = 1907; Health = 'Healthy'; Status = 'OK'; TempC = 41; WearPct = 2; ReadErrs = 0 }
         [pscustomobject]@{ Disk = 'SATA SSD 4TB'; Type = 'SSD'; SizeGB = 3726; Health = 'Healthy'; Status = 'OK'; TempC = 33; WearPct = 0; ReadErrs = 0 }
+    }
+    $env:MK_SNAP_PROTECTION = $ProtectionMode
+    function Get-ProtectionStatus {
+        $wd = [pscustomobject]@{ Name = 'Windows Defender'; Enabled = ($env:MK_SNAP_PROTECTION -eq 'Defender') }
+        $on = [pscustomobject]@{ AMRunningMode = 'Normal'; AMServiceEnabled = $true; RealTimeProtectionEnabled = ($env:MK_SNAP_PROTECTION -eq 'Defender'); AntivirusSignatureLastUpdated = (Get-Date).AddHours(-3); QuickScanEndTime = (Get-Date).AddDays(-1); FullScanEndTime = (Get-Date).AddDays(-12) }
+        if ($env:MK_SNAP_PROTECTION -eq 'Other') { $s = Get-FuProtectionState @([pscustomobject]@{ Name = 'Norton 360'; Enabled = $true }, $wd) ([pscustomobject]@{ AMRunningMode = 'Not running'; AMServiceEnabled = $false }) }
+        else { $s = Get-FuProtectionState @($wd) $on }
+        $s.RansomwareKnown = $true
+        $s
+    }
+    function Get-ProtectionThreats {
+        [pscustomobject]@{ Name = 'Trojan:Win32/Sample'; When = (Get-Date).AddDays(-4); Changed = (Get-Date).AddDays(-4); Severity = 'Severe'; Path = 'C:\Users\me\Downloads\free-game-setup.exe'; Status = 'Quarantined'; Tone = 'good' }
+        [pscustomobject]@{ Name = 'PUA:Win32/Sample'; When = (Get-Date).AddDays(-19); Changed = (Get-Date).AddDays(-19); Severity = 'Moderate'; Path = 'C:\Users\me\Downloads\toolbar.exe'; Status = 'Removed'; Tone = 'good' }
     }
     function Get-UsableVolumes { [pscustomobject]@{ DriveLetter = 'C'; Size = 1TB }; [pscustomobject]@{ DriveLetter = 'D'; Size = 2TB } }
     function Get-FuOpenPrograms($Rows) { @('powershell') }

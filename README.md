@@ -1,4 +1,4 @@
-﻿# Makatools
+# Makatools
 
 Free tools to clean up, speed up and look after your PC. For Windows 10 and 11 (64-bit). No ads, no paid tiers, no telemetry.
 
@@ -36,6 +36,7 @@ Makatools isn't code-signed yet, so the first time you download and run it:
 | **Services** | Start and stop Windows services |
 | **Recover Deleted** | Puts Recycle Bin files back where they came from |
 | **Secure Delete** | Overwrites a file with random data, then deletes it |
+| **Protection** | Microsoft Defender's status, scans, definition updates, recent threats and ransomware switch, plus a warning on Home if your PC is ever unprotected |
 | **Disk Health** | Drive health, temperature, wear, error checks and optimizing |
 | **Activity Log** | Every change Makatools has made |
 
@@ -66,7 +67,7 @@ Makatools **never** touches saved passwords, bookmarks, autofill, documents or t
 ## Safe by design
 
 - Anything that deletes or changes something asks first, and is written to the Activity Log.
-- Makatools refuses to switch off, stop or end antivirus software, including Norton 360, Microsoft Defender, Avast, AVG, McAfee, Kaspersky, Bitdefender, ESET and Malwarebytes.
+- Makatools refuses to switch off, stop or end antivirus software, including Norton 360, Microsoft Defender, Avast, AVG, McAfee, Kaspersky, Bitdefender, ESET and Malwarebytes. The one exception is the ransomware switch on Protection, which only changes when you flip it yourself and confirm.
 - Nothing runs in the background. Makatools only does things while you have it open.
 
 ## Limits
@@ -76,6 +77,9 @@ Makatools **never** touches saved passwords, bookmarks, autofill, documents or t
 - **No registry cleaner, on purpose.** Removing "broken" registry entries rarely speeds Windows up and can break software.
 - Some apps use unusual uninstall commands that may not start from Apps. Use Settings > Apps for those.
 - Disk temperature and wear need administrator rights.
+- **Protection controls work with Microsoft Defender only.** If another antivirus is on, Windows stops Defender, so the page says which antivirus is protecting your PC and leaves scans to that app.
+- **Ransomware protection also applies to Makatools.** While it's on, Windows blocks Large Files, Duplicates, Recover Deleted and Secure Delete from changing Documents, Pictures, Videos, Music and Desktop. Makatools says so when it happens.
+- **Scans can't be cancelled from Makatools.** Microsoft Defender runs them, so use Windows Security to stop one.
 
 ## For developers
 

@@ -1,4 +1,4 @@
-﻿# Makatools tests. Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
+# Makatools tests. Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 # Works in a temp folder and a throwaway HKCU key; does not touch real user files.
 # Exits 1 if any test fails.
 # -ResultFile also writes everything to a file (for elevated runs, whose window closes).
@@ -103,6 +103,98 @@ Test-Case 'desktop.ini is never counted or removed; an empty Recycle Bin counts 
     New-TestFile (Join-Path $bin '$RABC.txt') 5000
     $m = Measure-FuFolder $bin
     Assert ($m.Files -eq 1 -and $m.Bytes -eq 5000) "one deleted file counted as $($m.Files), $($m.Bytes) bytes"
+}
+
+Test-Case 'Protection: every mix of antivirus readings gives the right answer' {
+    $norton = [pscustomobject]@{ Name = 'Norton 360'; Enabled = $true }
+    $nortonOff = [pscustomobject]@{ Name = 'Norton 360'; Enabled = $false }
+    $wdOff = [pscustomobject]@{ Name = 'Windows Defender'; Enabled = $false }
+    $wdOn = [pscustomobject]@{ Name = 'Windows Defender'; Enabled = $true }
+    $now = [datetime]'2026-11-07 12:00'
+    $mp = { param($Mode, $Rt, $Days = 0) [pscustomobject]@{ AMRunningMode = $Mode; AMServiceEnabled = ($Mode -ne 'Not running'); RealTimeProtectionEnabled = $Rt; AntivirusSignatureLastUpdated = $now.AddDays(-$Days); DefenderSignaturesOutOfDate = $false; AntivirusSignatureVersion = '1.2'; QuickScanEndTime = $null; FullScanEndTime = $now.AddDays(-3) } }
+
+    # Exactly what a real PC with Norton 360 reports
+    $s = Get-FuProtectionState @($norton, $wdOff) ([pscustomobject]@{ AMRunningMode = 'Not running'; AMServiceEnabled = $false; RealTimeProtectionEnabled = $false; AntivirusSignatureLastUpdated = $null }) $now
+    Assert ($s.Mode -eq 'Other' -and $s.Level -eq 'good' -and -not $s.Usable -and $s.Title -match 'Norton 360') "Norton: $($s.Mode)/$($s.Level)/$($s.Title)"
+
+    $s = Get-FuProtectionState @($wdOn) (& $mp 'Normal' $true) $now
+    Assert ($s.Mode -eq 'Defender' -and $s.Level -eq 'good' -and $s.Usable -and $s.RealTime) "Defender on: $($s.Mode)/$($s.Level)"
+    Assert ($null -eq $s.QuickScan -and $s.FullScan -eq $now.AddDays(-3)) 'scan dates'
+
+    $s = Get-FuProtectionState @($wdOn) (& $mp 'Normal' $true 7) $now
+    Assert ($s.Level -eq 'good') "definitions 7 days old: $($s.Level)"
+    $s = Get-FuProtectionState @($wdOn) (& $mp 'Normal' $true 9) $now
+    Assert ($s.Level -eq 'warn' -and $s.Detail -match '9 days') "definitions 9 days old: $($s.Level)/$($s.Detail)"
+
+    $s = Get-FuProtectionState @($wdOff) (& $mp 'Normal' $false) $now
+    Assert ($s.Mode -eq 'Off' -and $s.Level -eq 'bad' -and $s.Usable) "real-time off: $($s.Mode)/$($s.Level)"
+    $s = Get-FuProtectionState @() (& $mp 'Normal' $false) $now
+    Assert ($s.Level -eq 'bad') "real-time off, no list: $($s.Level)"
+
+    $s = Get-FuProtectionState @($nortonOff, $wdOff) ([pscustomobject]@{ AMRunningMode = 'Not running'; AMServiceEnabled = $false; RealTimeProtectionEnabled = $false }) $now
+    Assert ($s.Mode -eq 'Off' -and $s.Level -eq 'bad' -and -not $s.Usable) "everything off: $($s.Mode)/$($s.Level)"
+    $s = Get-FuProtectionState @($nortonOff, $wdOn) (& $mp 'Normal' $true) $now
+    Assert ($s.Mode -eq 'Defender' -and $s.Level -eq 'good') "Norton off, Defender on: $($s.Mode)"
+    $s = Get-FuProtectionState @($norton, $wdOff) $null $now
+    Assert ($s.Mode -eq 'Other' -and $s.Level -eq 'good') "Norton on, Defender unreadable: $($s.Mode)"
+    $s = Get-FuProtectionState @($wdOn) $null $now
+    Assert ($s.Mode -eq 'Defender' -and $s.Level -eq 'good' -and -not $s.Usable) "Defender unreadable: $($s.Mode)"
+
+    # Never a false alarm when Windows simply won't say
+    $s = Get-FuProtectionState @() $null $now
+    Assert ($s.Mode -eq 'Unknown' -and $s.Level -ne 'bad') "nothing known: $($s.Mode)/$($s.Level)"
+    $s = Get-FuProtectionState @() ([pscustomobject]@{ AMRunningMode = 'Not running'; AMServiceEnabled = $false; RealTimeProtectionEnabled = $false }) $now
+    Assert ($s.Level -ne 'bad') "Defender stopped, antivirus list empty: $($s.Level)"
+}
+
+Test-Case 'Protection: threats list newest first, with plain names, paths and status' {
+    $t0 = [datetime]'2026-11-01 08:00'
+    $det = @(
+        [pscustomobject]@{ ThreatID = 1; InitialDetectionTime = $t0; LastThreatStatusChangeTime = $t0.AddHours(2); ThreatStatusID = 3; Resources = @('file:_C:\a\old.exe') }
+        [pscustomobject]@{ ThreatID = 2; InitialDetectionTime = $t0.AddDays(2); LastThreatStatusChangeTime = $null; ThreatStatusID = 1; Resources = @('containerfile:_C:\b\new.zip', 'file:_C:\b\x') }
+        [pscustomobject]@{ ThreatID = 9; InitialDetectionTime = $t0.AddDays(1); ThreatStatusID = 103; Resources = $null }
+        [pscustomobject]@{ ThreatID = 3; InitialDetectionTime = $t0.AddHours(1); ThreatStatusID = 77; Resources = @('file:_C:\c') }
+    )
+    $thr = @([pscustomobject]@{ ThreatID = 1; ThreatName = 'Trojan:Win32/Old'; SeverityID = 5 }, [pscustomobject]@{ ThreatID = 2; ThreatName = 'Virus:DOS/New'; SeverityID = 1 })
+    $rows = @(ConvertTo-FuThreatRows $det $thr)
+    Assert ($rows.Count -eq 4) "rows: $($rows.Count)"
+    Assert ($rows[0].Name -eq 'Virus:DOS/New' -and $rows[0].Path -eq 'C:\b\new.zip' -and $rows[0].Status -eq 'Found' -and $rows[0].Tone -eq 'bad' -and $rows[0].Severity -eq 'Low') "first: $($rows[0] | Out-String)"
+    Assert ($rows[1].Name -eq 'Unknown threat' -and $rows[1].Status -eq 'Needs attention' -and $rows[1].Path -eq '') "second: $($rows[1] | Out-String)"
+    Assert ($rows[3].Status -eq 'Quarantined' -and $rows[3].Tone -eq 'good' -and $rows[3].Changed -eq $t0.AddHours(2)) "last: $($rows[3] | Out-String)"
+    Assert ($rows[2].Status -eq 'Unknown' -and $rows[2].Tone -eq 'warn') "unknown status: $($rows[2] | Out-String)"
+    Assert (@(ConvertTo-FuThreatRows $det $thr 2).Count -eq 2) 'limit ignored'
+    Assert (@(ConvertTo-FuThreatRows $null $null).Count -eq 0) 'no detections should give no rows'
+}
+
+Test-Case 'Protection: the ransomware switch reads the setting back, and logs only real changes' {
+    $script:CfaNow = 0
+    $script:CfaSent = @()
+    function Set-MpPreference { param($EnableControlledFolderAccess, $ErrorAction) $script:CfaSent += $EnableControlledFolderAccess; if ($script:CfaWorks) { $script:CfaNow = $(if ($EnableControlledFolderAccess -eq 'Enabled') { 1 } else { 0 }) } }
+    function Get-MpPreference { param($ErrorAction) [pscustomobject]@{ EnableControlledFolderAccess = $script:CfaNow } }
+    $script:CfaWorks = $true
+    Set-RansomwareProtection $true
+    Assert ($script:CfaSent[-1] -eq 'Enabled' -and $script:CfaNow -eq 1) 'did not turn on'
+    Assert ((Get-Content -LiteralPath (Get-FuLogPath) -Raw) -match 'switched ransomware protection on') 'not logged'
+    Set-RansomwareProtection $false
+    Assert ($script:CfaSent[-1] -eq 'Disabled' -and $script:CfaNow -eq 0) 'did not turn off'
+    $script:CfaWorks = $false
+    $threw = $false
+    try { Set-RansomwareProtection $true } catch { $threw = $_.Exception.Message -match "didn't apply" }
+    Assert $threw 'a change Windows ignored was reported as done'
+}
+
+Test-Case 'Protection: a file change is only blamed on ransomware protection when that is the cause' {
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    $script:CfaNow = 1
+    function Get-MpPreference { param($ErrorAction) [pscustomobject]@{ EnableControlledFolderAccess = $script:CfaNow } }
+    Assert (Test-FuRansomwareBlocks (Join-Path $docs 'a\b.txt')) 'Documents, switch on'
+    Assert (-not (Test-FuRansomwareBlocks (Join-Path $env:TEMP 'b.txt'))) 'a temp file is not guarded'
+    Assert (-not (Test-FuRansomwareBlocks ($docs + 'Other\b.txt'))) 'a folder that only starts with the same name'
+    Assert (-not (Test-FuRansomwareBlocks '')) 'no path'
+    $script:CfaNow = 0
+    Assert (-not (Test-FuRansomwareBlocks (Join-Path $docs 'b.txt'))) 'Documents, switch off'
+    function Get-MpPreference { param($ErrorAction) throw 'Defender is stopped' }
+    Assert (-not (Test-FuRansomwareBlocks (Join-Path $docs 'b.txt'))) 'Defender stopped'
 }
 
 Test-Case 'Cleanup never sweeps a whole drive' {
@@ -575,7 +667,7 @@ if (-not $SkipUi) {
     Wait-Ui 300
 
     Test-Case 'UI: window loads in both themes with every control found' {
-        foreach ($n in 'Sheet', 'TaskPill', 'HeroBig', 'CleanGo', 'StartupList', 'ShredGo', 'DiskList', 'ThemeDark', 'CapClose') { Assert $script:Ui[$n] "control $n missing" }
+        foreach ($n in 'Sheet', 'TaskPill', 'HeroBig', 'CleanGo', 'StartupList', 'ShredGo', 'DiskList', 'ThemeDark', 'CapClose', 'HomeAlert', 'ProtectRansom', 'ProtectThreats') { Assert $script:Ui[$n] "control $n missing" }
         foreach ($t in 'Dark', 'Light') {
             Set-FuTheme $t
             Assert ((Get-FuEffectiveTheme $t) -eq $t) "theme $t"
@@ -646,9 +738,9 @@ if (-not $SkipUi) {
     }
 
     Test-Case 'UI: sidebar shows exactly one page at a time, and every page opens' {
-        foreach ($n in 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings', 'Home') {
+        foreach ($n in 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Protect', 'Disk', 'Log', 'Settings', 'Home') {
             Go-Page $n
-            $shown = @('Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings' | Where-Object { $script:Ui["Page$_"].Visibility -eq 'Visible' })
+            $shown = @('Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Protect', 'Disk', 'Log', 'Settings' | Where-Object { $script:Ui["Page$_"].Visibility -eq 'Visible' })
             Assert ($shown.Count -eq 1 -and $shown[0] -eq $n) "$n showed: $($shown -join ',')"
         }
         Wait-FuJob
@@ -744,6 +836,7 @@ if (-not $SkipUi) {
         function Invoke-AutoClean([string]$Reason) { [pscustomobject]@{ FreedMB = 2048; Deleted = 40; Skipped = 2; Items = 3; LeftForOpenPrograms = @() } }
         function Get-CleanupTargets { }   # the re-scan afterwards finds nothing
         Go-Page 'Home'
+        Wait-FuJob
         $script:Ui.HeroClean.Visibility = 'Visible'
         $script:ConfirmAnswer = $false
         Click-Ui $script:Ui.HeroClean
@@ -979,6 +1072,153 @@ if (-not $SkipUi) {
         Click-Ui $script:Ui.SettingsUpdate
         Wait-FuJob
         Assert (($script:Infos -join ' ') -match 'up to date') "up to date: $($script:Infos -join ' ')"
+    }
+
+    Test-Case 'UI: with another antivirus on, Protection names it, hides Defender controls, and Home stays calm' {
+        function Get-ProtectionStatus { Get-FuProtectionState @([pscustomobject]@{ Name = 'Norton 360'; Enabled = $true }, [pscustomobject]@{ Name = 'Windows Defender'; Enabled = $false }) ([pscustomobject]@{ AMRunningMode = 'Not running'; AMServiceEnabled = $false; RealTimeProtectionEnabled = $false }) }
+        function Get-ProtectionThreats { }
+        Go-Page 'Protect'
+        Wait-FuJob
+        Assert ($script:Ui.ProtectTitle.Text -match 'Norton 360') "title: $($script:Ui.ProtectTitle.Text)"
+        Assert ($script:Ui.ProtectControls.Visibility -ne 'Visible') 'Defender controls shown while Defender is stopped'
+        Assert ($script:Ui.HomeAlert.Visibility -ne 'Visible') 'Home warned although Norton is protecting the PC'
+        Assert ($script:Ui.TileHealthSub.Text -eq 'Norton 360 is on') "tile: $($script:Ui.TileHealthSub.Text)"
+        Go-Page 'Home'
+        Wait-FuJob
+    }
+
+    Test-Case 'UI: protection off warns on Home, leads to Protection, and clears once it is back on' {
+        function Get-ProtectionThreats { }
+        function Get-ProtectionStatus { Get-FuProtectionState @([pscustomobject]@{ Name = 'Windows Defender'; Enabled = $false }) ([pscustomobject]@{ AMRunningMode = 'Normal'; AMServiceEnabled = $true; RealTimeProtectionEnabled = $false }) }
+        Start-FuProtectionLoad
+        Wait-FuJob
+        Assert ($script:Ui.HomeAlert.Visibility -eq 'Visible') 'no warning on Home'
+        Assert ($script:Ui.HomeAlertTitle.Text -match "isn't protected") "warning: $($script:Ui.HomeAlertTitle.Text)"
+        Assert ($script:Ui.TileHealthValue.Text -eq 'Protection off') "tile: $($script:Ui.TileHealthValue.Text)"
+        Click-Ui $script:Ui.HomeAlertGo
+        Wait-FuJob
+        Assert ($script:Ui.PageProtect.Visibility -eq 'Visible') 'Review did not open Protection'
+        function Get-ProtectionStatus { Get-FuProtectionState @([pscustomobject]@{ Name = 'Windows Defender'; Enabled = $true }) ([pscustomobject]@{ AMRunningMode = 'Normal'; AMServiceEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = (Get-Date) }) }
+        Go-Page 'Home'
+        Wait-FuJob
+        Assert ($script:Ui.HomeAlert.Visibility -ne 'Visible') 'warning stayed after protection came back'
+        Assert ($script:Ui.TileHealthValue.Text -ne 'Protection off') "tile stayed: $($script:Ui.TileHealthValue.Text)"
+        Assert ($script:Ui.TileHealthSub.Text -eq 'Microsoft Defender is on') "tile: $($script:Ui.TileHealthSub.Text)"
+        # A late system reading can't contradict it: Windows' antivirus list can lag behind Defender
+        Update-FuHomeInfo ([pscustomobject]@{ Volumes = @(); SystemDrive = 'C'; MemoryUsed = 1; MemoryBytes = 2; MemoryText = '2'; Antivirus = @(); Computer = 'x'; Windows = 'x'; Processor = 'x'; Uptime = 'x' })
+        Assert ($script:Ui.TileHealthValue.Text -eq 'All good') "lagging list changed the tile: $($script:Ui.TileHealthValue.Text)"
+    }
+
+    Test-Case 'UI: Protection shows status and threats; scans run and report; the buttons always come back' {
+        function Get-ProtectionStatus { $s = Get-FuProtectionState @([pscustomobject]@{ Name = 'Windows Defender'; Enabled = $true }) ([pscustomobject]@{ AMRunningMode = 'Normal'; AMServiceEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = (Get-Date).AddHours(-1); QuickScanEndTime = (Get-Date).AddDays(-2) }); $s.RansomwareKnown = $true; $s.Ransomware = $true; $s }
+        function Get-ProtectionThreats { [pscustomobject]@{ Name = 'Virus:DOS/Test'; When = (Get-Date).AddDays(-30); Changed = (Get-Date).AddDays(-30); Severity = 'Severe'; Path = 'C:\x\y.exe'; Status = 'Quarantined'; Tone = 'good' } }
+        function Start-DefenderScan([string]$Kind) { Set-Content -LiteralPath (Join-Path $script:AppRoot 'scan-called.txt') -Value $Kind }
+        function Update-DefenderDefinitions { Set-Content -LiteralPath (Join-Path $script:AppRoot 'update-called.txt') -Value 'yes' }
+        $script:ConfirmAnswer = $false
+        [void]$script:Infos.Clear()
+        Go-Page 'Protect'
+        Wait-FuJob
+        Assert ($script:Ui.ProtectControls.Visibility -eq 'Visible') 'controls hidden'
+        $facts = @($script:Ui.ProtectFacts.ItemsSource)
+        Assert ($facts.Count -eq 4 -and $facts[0].Value -eq 'On' -and $facts[1].Value -match '^Updated (today|yesterday)' -and $facts[2].Value -eq '2 days ago' -and $facts[3].Value -eq 'Never') "facts: $($facts | Out-String)"
+        Assert ($script:Ui.ProtectRansom.IsChecked -eq $true) 'ransomware switch should show on'
+        $row = @($script:Ui.ProtectThreats.ItemsSource)
+        Assert ($row.Count -eq 1 -and $row[0].TagText -eq 'Quarantined' -and $row[0].Detail -match 'Severe' -and $row[0].Detail -match 'y\.exe') "threat: $($row | Out-String)"
+        Assert ($script:Ui.ProtectNoThreats.Visibility -ne 'Visible') 'empty message shown beside a threat'
+
+        # A full scan asks first, and No means no scan
+        Click-Ui $script:Ui.ProtectFull
+        Wait-FuJob
+        Assert (-not (Test-Path -LiteralPath (Join-Path $script:AppRoot 'scan-called.txt'))) 'full scan ran without a yes'
+        # A quick scan runs, and the old threat isn't reported as new
+        Click-Ui $script:Ui.ProtectQuick
+        Assert (-not $script:Ui.ProtectQuick.IsEnabled) 'buttons stayed on during a scan'
+        Assert ($script:Ui.TaskCancel.Visibility -ne 'Visible') 'offered a Cancel that would not stop the scan'
+        Wait-FuJob
+        Wait-FuJob
+        Assert ((Get-Content -LiteralPath (Join-Path $script:AppRoot 'scan-called.txt')) -eq 'Quick') 'quick scan not called'
+        Assert ($script:Ui.ProtectQuick.IsEnabled) 'buttons stayed off after the scan'
+        Assert ($script:Ui.TaskText.Text -match 'Nothing new') "pill: $($script:Ui.TaskText.Text)"
+        # A threat the scan found is reported
+        function Get-ProtectionThreats { [pscustomobject]@{ Name = 'Virus:DOS/Test'; When = (Get-Date); Changed = (Get-Date); Severity = 'Severe'; Path = 'C:\x\y.exe'; Status = 'Found'; Tone = 'bad' } }
+        [void]$script:Infos.Clear()
+        Click-Ui $script:Ui.ProtectQuick
+        Wait-FuJob
+        Wait-FuJob
+        Assert (($script:Infos -join ' ') -match 'Threats found') "told: $($script:Infos -join ' | ')"
+        # However a scan task ends, the buttons come back
+        function Start-DefenderScan([string]$Kind) { Start-Sleep -Seconds 30 }
+        Click-Ui $script:Ui.ProtectQuick
+        Wait-Ui 150
+        Stop-FuWork
+        Wait-FuJob
+        Assert ($script:Ui.ProtectQuick.IsEnabled) 'buttons stayed off after cancelling'
+        Click-Ui $script:Ui.ProtectUpdate
+        Wait-FuJob
+        Wait-FuJob
+        Assert (Test-Path -LiteralPath (Join-Path $script:AppRoot 'update-called.txt')) 'update not called'
+        Assert ($script:Ui.ProtectUpdate.IsEnabled) 'buttons stayed off after updating'
+        Remove-Item -LiteralPath (Join-Path $script:AppRoot 'scan-called.txt'), (Join-Path $script:AppRoot 'update-called.txt') -Force
+        $script:ConfirmAnswer = $true
+    }
+
+    Test-Case 'UI: Secure Delete explains a ransomware block, and other failures keep their own message' {
+        $f = Join-Path $tmp 'shred-block.txt'
+        Set-Content -LiteralPath $f -Value 'x'
+        function Remove-FileSecurely { param($Path, $Passes) throw 'Access to the path is denied.' }
+        $script:ConfirmAnswer = $true
+        [void]$script:Infos.Clear()
+        function Test-FuRansomwareBlocks([string]$Path) { $true }
+        Set-FuShredFile $f
+        Click-Ui $script:Ui.ShredGo
+        Wait-FuJob
+        Assert (($script:Infos -join ' ') -match 'Blocked by ransomware protection') "told: $($script:Infos -join ' | ')"
+        [void]$script:Infos.Clear()
+        function Test-FuRansomwareBlocks([string]$Path) { $false }
+        Click-Ui $script:Ui.ShredGo
+        Wait-FuJob
+        Assert (($script:Infos -join ' ') -match 'Access to the path is denied' -and ($script:Infos -join ' ') -notmatch 'ransomware') "told: $($script:Infos -join ' | ')"
+        Assert (Test-Path -LiteralPath $f) 'file should still be there'
+        Set-FuShredFile ''
+        Remove-Item -LiteralPath $f -Force
+    }
+
+    Test-Case 'UI: the ransomware switch needs admin and a yes, and only moves once Windows has changed it' {
+        function Get-ProtectionThreats { }
+        function Get-ProtectionStatus { $s = Get-FuProtectionState @([pscustomobject]@{ Name = 'Windows Defender'; Enabled = $true }) ([pscustomobject]@{ AMRunningMode = 'Normal'; AMServiceEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = (Get-Date) }); $s.RansomwareKnown = $true; $s.Ransomware = $false; $s }
+        function Set-RansomwareProtection([bool]$On) { if ($On) { Set-Content -LiteralPath (Join-Path $script:AppRoot 'cfa.txt') -Value 'on' } }
+        function Restart-FuAsAdmin { $script:Restarted = $true }
+        $script:ConfirmAnswer = $false
+        [void]$script:Infos.Clear()
+        Start-FuProtectionLoad -Threats
+        Wait-FuJob
+        $sw = $script:Ui.ProtectRansom
+        Assert ($sw.IsChecked -eq $false) 'should start off'
+        $cfaFile = Join-Path $script:AppRoot 'cfa.txt'
+
+        function Test-FuAdmin { $false }
+        $sw.IsChecked = $true
+        Click-Ui $sw
+        Wait-FuJob
+        Assert ($sw.IsChecked -eq $false) 'switch moved without admin rights'
+        Assert (-not (Test-Path -LiteralPath $cfaFile)) 'changed without admin rights'
+        Assert (($script:Infos -join ' ') -match 'dministrator') "asked: $($script:Infos -join ' | ')"
+
+        function Test-FuAdmin { $true }
+        [void]$script:Infos.Clear()
+        $sw.IsChecked = $true
+        Click-Ui $sw
+        Wait-FuJob
+        Assert ($sw.IsChecked -eq $false -and -not (Test-Path -LiteralPath $cfaFile)) 'changed without a yes'
+        Assert (($script:Infos -join ' ') -match 'Turn on') "asked: $($script:Infos -join ' | ')"
+
+        $script:ConfirmAnswer = $true
+        $sw.IsChecked = $true
+        Click-Ui $sw
+        Wait-FuJob
+        Assert ($sw.IsChecked -eq $true -and (Test-Path -LiteralPath $cfaFile)) 'yes did not turn it on'
+        Assert ($sw.IsEnabled) 'switch stayed off'
+        Remove-Item -LiteralPath $cfaFile -Force
     }
 
     Test-Case 'UI: a new version shows the button and asks; a blocked update offers the download page' {

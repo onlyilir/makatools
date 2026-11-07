@@ -1,11 +1,11 @@
-﻿# Makatools - core logic. No UI code in this file, so it can be unit-tested.
+# Makatools - core logic. No UI code in this file, so it can be unit-tested.
 # Every function here either returns data or changes the system; the UI decides when to call them.
 
 if (-not $script:AppRoot) { $script:AppRoot = Split-Path -Parent $PSScriptRoot }
 
 # The version, and the GitHub repository ("owner/name") whose releases the update check reads.
 # These are functions so background tasks get them too. An empty repository turns updates off.
-function Get-FuVersion { '2.2.1' }
+function Get-FuVersion { '2.3.0' }
 function Get-FuUpdateRepo { 'onlyilir/makatools' }
 
 # ---------------------------------------------------------------- environment
@@ -46,6 +46,174 @@ function Get-AntivirusStatus {
         $hex = '{0:X6}' -f [int]$a.productState
         [pscustomobject]@{ Name = $a.displayName; Enabled = ($hex.Substring(2, 2) -in '10', '11') }
     }
+}
+
+# ---------------------------------------------------------------- protection
+
+# Turns what Windows reports into one answer. Takes plain readings, so every combination can be tested.
+#   Products: rows from Get-AntivirusStatus. Mp: Get-MpComputerStatus, or $null if it couldn't be read.
+#   Mode:  Defender = Defender protects this PC. Other = another antivirus does, so Defender is stopped.
+#          Off = nothing is protecting it. Unknown = Windows wouldn't say, so nothing is claimed.
+#   Level: good, warn, bad or unknown. Only bad puts a warning on Home.
+#   Usable: Defender is running, so its scans and switches can work.
+function Get-FuProtectionState($Products, $Mp, [datetime]$Now = (Get-Date)) {
+    $products = @($Products | Where-Object { $_ })
+    $defender = @($products | Where-Object { $_.Name -match 'Defender' }) | Select-Object -First 1
+    $other = @($products | Where-Object { $_.Enabled -and $_.Name -notmatch 'Defender' }) | Select-Object -First 1
+    $running = [bool]($Mp -and $Mp.AMServiceEnabled -and [string]$Mp.AMRunningMode -notmatch 'Not running')
+    $realTime = [bool]($running -and $Mp.RealTimeProtectionEnabled)
+
+    $signed = $null
+    $age = $null
+    if ($running -and $Mp.AntivirusSignatureLastUpdated) {
+        $signed = [datetime]$Mp.AntivirusSignatureLastUpdated
+        $age = [int][math]::Floor(($Now - $signed).TotalDays)
+    }
+    $old = [bool]($running -and (($null -ne $age -and $age -gt 7) -or $Mp.DefenderSignaturesOutOfDate))
+
+    if ($realTime) {
+        $mode = 'Defender'
+        if ($old) {
+            $level = 'warn'
+            $title = 'Protection is on, but out of date'
+            $detail = $(if ($null -ne $age) { "Virus definitions are $age days old. Update them to catch newer threats." } else { 'Virus definitions are out of date. Update them to catch newer threats.' })
+        } else {
+            $level = 'good'
+            $title = 'Your PC is protected'
+            $detail = 'Microsoft Defender is watching for threats in real time.'
+        }
+    } elseif ($other) {
+        $mode = 'Other'
+        $level = 'good'
+        $title = "$($other.Name) is protecting this PC"
+        $detail = "Microsoft Defender steps aside while another antivirus is on, so its scans and switches aren't available. Use $($other.Name) for those."
+    } elseif ($running) {
+        $mode = 'Off'
+        $level = 'bad'
+        $title = "Your PC isn't protected"
+        $detail = 'Real-time protection is off, so threats can run without being stopped. Turn it on in Windows Security.'
+    } elseif ($defender -and $defender.Enabled) {
+        $mode = 'Defender'
+        $level = 'good'
+        $title = 'Your PC is protected'
+        $detail = "Windows reports Microsoft Defender is on, but its details can't be read right now."
+    } elseif ($products.Count) {
+        $mode = 'Off'
+        $level = 'bad'
+        $title = "Your PC isn't protected"
+        $detail = 'No antivirus is running. Turn on Microsoft Defender in Windows Security, or start your antivirus.'
+    } else {
+        $mode = 'Unknown'
+        $level = 'unknown'
+        $title = "Protection status isn't available"
+        $detail = "Windows didn't report it. Windows Security has the full picture."
+    }
+
+    [pscustomobject]@{
+        Mode             = $mode
+        Level            = $level
+        Product          = $(if ($mode -eq 'Other') { [string]$other.Name } else { 'Microsoft Defender' })
+        Title            = $title
+        Detail           = $detail
+        Usable           = $running
+        RealTime         = $realTime
+        SignatureDate    = $signed
+        SignatureVersion = $(if ($running) { [string]$Mp.AntivirusSignatureVersion } else { '' })
+        QuickScan        = $(if ($running -and $Mp.QuickScanEndTime) { [datetime]$Mp.QuickScanEndTime } else { $null })
+        FullScan         = $(if ($running -and $Mp.FullScanEndTime) { [datetime]$Mp.FullScanEndTime } else { $null })
+        RansomwareKnown  = $false
+        Ransomware       = $false
+    }
+}
+
+# Reads the status. Read-only, and needs no administrator rights.
+function Get-ProtectionStatus {
+    $mp = $null
+    try { $mp = Get-MpComputerStatus -ErrorAction Stop } catch { $mp = $null }
+    $state = Get-FuProtectionState @(Get-AntivirusStatus) $mp
+    if ($state.Usable) {
+        try {
+            # 0 off, 1 on, 2 audit only, 3 disks only, 4 audit disks only
+            $cfa = [int](Get-MpPreference -ErrorAction Stop).EnableControlledFolderAccess
+            $state.RansomwareKnown = $true
+            $state.Ransomware = ($cfa -in 1, 3)
+        } catch { $state.RansomwareKnown = $false }
+    }
+    return $state
+}
+
+# Newest first. Takes plain readings, so it can be tested with made-up detections.
+function ConvertTo-FuThreatRows($Detections, $Threats, [int]$Max = 20) {
+    $byId = @{}
+    foreach ($t in @($Threats | Where-Object { $_ })) { $byId[[string]$t.ThreatID] = $t }
+    $status = @{
+        1 = @('Found', 'bad'); 2 = @('Cleaned', 'good'); 3 = @('Quarantined', 'good'); 4 = @('Removed', 'good'); 5 = @('Allowed', 'warn'); 6 = @('Blocked', 'good')
+        102 = @('Needs attention', 'bad'); 103 = @('Needs attention', 'bad'); 104 = @('Needs attention', 'bad'); 105 = @('Needs attention', 'bad'); 107 = @('Needs attention', 'bad')
+    }
+    $severity = @{ 1 = 'Low'; 2 = 'Moderate'; 4 = 'High'; 5 = 'Severe' }
+    @($Detections | Where-Object { $_ } | Sort-Object InitialDetectionTime -Descending | Select-Object -First $Max) | ForEach-Object {
+        $info = $byId[[string]$_.ThreatID]
+        $state = $status[[int]$_.ThreatStatusID]
+        $first = @($_.Resources | Where-Object { $_ }) | Select-Object -First 1
+        $changed = $_.InitialDetectionTime
+        if ($_.LastThreatStatusChangeTime -and $_.LastThreatStatusChangeTime -gt $changed) { $changed = $_.LastThreatStatusChangeTime }
+        [pscustomobject]@{
+            Name     = $(if ($info -and $info.ThreatName) { [string]$info.ThreatName } else { 'Unknown threat' })
+            When     = [datetime]$_.InitialDetectionTime
+            Changed  = [datetime]$changed
+            Severity = $(if ($info) { [string]$severity[[int]$info.SeverityID] } else { '' })
+            Path     = ([string]$first -replace '^[A-Za-z]+:_', '')
+            Status   = $(if ($state) { $state[0] } else { 'Unknown' })
+            Tone     = $(if ($state) { $state[1] } else { 'warn' })
+        }
+    }
+}
+
+function Get-ProtectionThreats {
+    $found = @()
+    $known = @()
+    try { $found = @(Get-MpThreatDetection -ErrorAction Stop) } catch { return }
+    try { $known = @(Get-MpThreat -ErrorAction Stop) } catch { $known = @() }
+    ConvertTo-FuThreatRows $found $known
+}
+
+# Asks Defender to scan and waits until it finishes. Anything it finds, Defender handles itself.
+function Start-DefenderScan([string]$Kind) {
+    $type = $(if ($Kind -eq 'Full') { 'FullScan' } else { 'QuickScan' })
+    Write-FuLog "Protection: started a $($Kind.ToLower()) scan"
+    Start-MpScan -ScanType $type -ErrorAction Stop
+    Write-FuLog "Protection: $($Kind.ToLower()) scan finished"
+}
+
+function Update-DefenderDefinitions {
+    Update-MpSignature -ErrorAction Stop
+    Write-FuLog 'Protection: updated virus definitions'
+}
+
+# Controlled folder access. Needs administrator rights. Reads the setting back, because a policy
+# can leave it unchanged without reporting an error.
+function Set-RansomwareProtection([bool]$On) {
+    Set-MpPreference -EnableControlledFolderAccess $(if ($On) { 'Enabled' } else { 'Disabled' }) -ErrorAction Stop
+    $now = [int](Get-MpPreference -ErrorAction Stop).EnableControlledFolderAccess
+    if (($now -in 1, 3) -ne $On) { throw "Windows didn't apply the change. A policy on this PC may control this setting." }
+    Write-FuLog ('Protection: switched ransomware protection ' + $(if ($On) { 'on' } else { 'off' }))
+}
+
+# True when ransomware protection is on and the path is in a folder it guards. Windows blocks
+# PowerShell, which runs Makatools, from changing those folders, and its errors don't say why.
+function Test-FuRansomwareBlocks([string]$Path) {
+    if (-not $Path) { return $false }
+    try { if ([int](Get-MpPreference -ErrorAction Stop).EnableControlledFolderAccess -notin 1, 3) { return $false } } catch { return $false }
+    $full = [IO.Path]::GetFullPath($Path)
+    foreach ($name in 'MyDocuments', 'MyPictures', 'MyVideos', 'MyMusic', 'Desktop', 'Favorites') {
+        $folder = [Environment]::GetFolderPath($name)
+        if ($folder -and $full.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Get-FuRansomwareBlockText {
+    "Ransomware protection is on, so Windows won't let Makatools change files in that folder. Nothing was changed. To go ahead, turn it off on the Protection page, then turn it back on afterwards."
 }
 
 # ---------------------------------------------------------------- logging

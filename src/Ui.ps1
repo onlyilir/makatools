@@ -1,4 +1,4 @@
-﻿# Makatools - user interface (WPF). All real work lives in Core.ps1; this file only wires the window
+# Makatools - user interface (WPF). All real work lives in Core.ps1; this file only wires the window
 # in MainWindow.xaml to it. Slow work runs in a second runspace (Start-FuWork) so the window stays
 # responsive. Event handlers run after the function that made them has returned, so they cannot see
 # its locals: controls are reached through $script:Ui (every x:Name in the window) and state through
@@ -196,7 +196,7 @@ function New-FuRunspace($Progress) {
 #   -Quiet      no status pill and no error dialog (quiet reads such as filling a list)
 #   -Exclusive  refuses to start while another exclusive task runs (anything that changes the PC)
 function Start-FuWork {
-    param([string]$Label, [scriptblock]$Work, [object[]]$Arguments = @(), [scriptblock]$OnDone, [scriptblock]$OnFail, [switch]$Quiet, [switch]$Exclusive)
+    param([string]$Label, [scriptblock]$Work, [object[]]$Arguments = @(), [scriptblock]$OnDone, [scriptblock]$OnFail, [scriptblock]$OnEnd, [switch]$Quiet, [switch]$Exclusive, [switch]$NoCancel)
     if ($Exclusive -and @($script:Tasks | Where-Object { $_.Exclusive }).Count) {
         Show-FuInfo 'Another task is still running. Wait for it to finish, or cancel it first.'
         return
@@ -207,7 +207,7 @@ function Start-FuWork {
     $ps.Runspace = $rs
     [void]$ps.AddScript($Work.ToString())
     foreach ($a in $Arguments) { [void]$ps.AddArgument($a) }
-    [void]$script:Tasks.Add(@{ Label = $Label; PS = $ps; Runspace = $rs; Handle = $ps.BeginInvoke(); OnDone = $OnDone; OnFail = $OnFail
+    [void]$script:Tasks.Add(@{ Label = $Label; PS = $ps; Runspace = $rs; Handle = $ps.BeginInvoke(); OnDone = $OnDone; OnFail = $OnFail; OnEnd = $OnEnd; NoCancel = [bool]$NoCancel
                                Quiet = [bool]$Quiet; Exclusive = [bool]$Exclusive; Progress = $progress })
     if (-not $script:JobTimer.IsEnabled) { $script:JobTimer.Start() }
     Update-FuTaskPill
@@ -222,7 +222,7 @@ function Update-FuTaskPill {
     if ($visible.Count) {
         $t = $visible[-1]
         $text = $(if ($t.Progress.Text) { $t.Progress.Text } else { "$($t.Label)..." })
-        Show-FuPill $text $true $true ([int]$t.Progress.Percent)
+        Show-FuPill $text $true (-not $t.NoCancel) ([int]$t.Progress.Percent)
         return
     }
     if ($script:ToastUntil -and (Get-Date) -lt $script:ToastUntil) { return }
@@ -249,6 +249,8 @@ function Invoke-FuTimerTick {
             if ($state -eq 'Failed' -and $task.PS.InvocationStateInfo.Reason) { $reason = $task.PS.InvocationStateInfo.Reason.Message }
             $task.PS.Dispose()
             $task.Runspace.Dispose()
+            # OnEnd runs however the task ended, cancelled included
+            if ($task.OnEnd) { & $task.OnEnd }
             if ($state -eq 'Stopped') {
                 if (-not $task.Quiet) { Show-FuToast 'Cancelled' }
                 continue
@@ -329,8 +331,13 @@ function New-MainForm {
     Connect-FuCleanup
     Connect-FuFilePages
     Connect-FuSystemPages
+    Connect-FuProtection
     Connect-FuSettings
 
+    # Coming back to the window checks protection again, at most once a minute
+    $window.Add_Activated({
+        if ($script:ProtectChecked -and ((Get-Date) - $script:ProtectChecked).TotalSeconds -ge 60) { Start-FuProtectionLoad }
+    })
     $window.Add_ContentRendered({
         Start-FuHomeLoad
         if ((Get-FuUpdateRepo) -and -not $script:NoUpdateCheck) { Start-FuUpdateCheck $true }
@@ -388,7 +395,7 @@ function Connect-FuNavigation {
 
 function Show-FuPage([string]$Name) {
     $ui = $script:Ui
-    foreach ($p in 'Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Disk', 'Log', 'Settings') {
+    foreach ($p in 'Home', 'Cleanup', 'Large', 'Dup', 'Startup', 'Apps', 'Proc', 'Svc', 'Recover', 'Shred', 'Protect', 'Disk', 'Log', 'Settings') {
         $page = $ui["Page$p"]
         if ($p -eq $Name) {
             $page.Visibility = 'Visible'
@@ -401,6 +408,8 @@ function Show-FuPage([string]$Name) {
     $first = -not $script:Visited[$Name]
     $script:Visited[$Name] = $true
     switch ($Name) {
+        'Home'    { if (-not $first) { Start-FuProtectionLoad } }
+        'Protect' { Start-FuProtectionLoad -Threats }
         'Cleanup' { if (-not $script:CleanRows -and -not $script:ScanRunning) { Start-FuCleanupScan } }
         'Large'   { if ($first) { $ui.LargePath.Text = $env:USERPROFILE } }
         'Dup'     { if ($first) { $ui.DupPath.Text = $env:USERPROFILE } }
@@ -423,7 +432,9 @@ function Connect-FuHome {
     $ui.TileStorage.Add_Click({ $script:Ui.NavLarge.IsChecked = $true })
     $ui.TileMemory.Add_Click({ $script:Ui.NavProc.IsChecked = $true })
     $ui.TileStartup.Add_Click({ $script:Ui.NavStartup.IsChecked = $true })
-    $ui.TileHealth.Add_Click({ $script:Ui.NavDisk.IsChecked = $true })
+    $ui.TileHealth.Add_Click({
+        if ($script:Protection -and $script:Protection.Level -in 'bad', 'warn') { $script:Ui.NavProtect.IsChecked = $true } else { $script:Ui.NavDisk.IsChecked = $true }
+    })
 }
 
 function Set-FuHero([string]$Kicker, [string]$Big, [string]$Sub, [bool]$Busy, [string]$Button = '') {
@@ -440,6 +451,7 @@ function Set-FuHero([string]$Kicker, [string]$Big, [string]$Sub, [bool]$Busy, [s
 function Start-FuHomeLoad {
     Start-FuWork 'Reading system information' { Get-SystemInfo } -Quiet -OnDone { param($o) Update-FuHomeInfo ($o | Select-Object -First 1) }
     Start-FuWork 'Reading startup programs' { Get-StartupEntries } -Quiet -OnDone { param($o) Update-FuStartupRows @($o); Update-FuStartupTile }
+    Start-FuProtectionLoad
     if (-not $script:ScanRunning) { Start-FuCleanupScan }
 }
 
@@ -456,9 +468,11 @@ function Update-FuHomeInfo($Info) {
     $ui.TileMemorySub.Text = '{0} of {1}' -f (Format-FuSize $Info.MemoryUsed), $Info.MemoryText
 
     $bad = @($Info.Volumes | Where-Object { $_.Health -and $_.Health -ne 'Healthy' })
+    $script:DisksBad = [bool]$bad.Count
     $av = @($Info.Antivirus | Where-Object { $_.Enabled }) | Select-Object -First 1
     $ui.TileHealthValue.Text = $(if ($bad.Count) { 'Check disks' } elseif (-not $av) { 'No antivirus' } else { 'All good' })
     $ui.TileHealthSub.Text = $(if ($av) { "$($av.Name) is on" } else { 'No active antivirus found' })
+    Update-FuProtectionTile
 
     $accent = Get-FuBrush 'Accent'
     $red = Get-FuBrush 'Red'
@@ -675,7 +689,9 @@ function Connect-FuFilePages {
         $picked = @($script:Ui.LargeList.SelectedItems)
         if (-not (Confirm-FuAction ('{0} will move to the Recycle Bin, where you can still get {1} back.' -f (Get-FuPlural $picked.Count 'file'), $(if ($picked.Count -eq 1) { 'it' } else { 'them' })) 'Move to the Recycle Bin?' 'Move')) { return }
         $failed = 0
-        foreach ($p in $picked) { try { Send-ToRecycleBin $p.Path } catch { $failed++ } }
+        $failedPath = ''
+        foreach ($p in $picked) { try { Send-ToRecycleBin $p.Path } catch { $failed++; $failedPath = $p.Path } }
+        Show-FuBlockedNote $failedPath
         $left = @($script:LargeRows | Where-Object { $picked -notcontains $_ })
         $script:LargeRows = $left
         Set-FuRows 'Large' $left 'No files left in this list.'
@@ -690,7 +706,9 @@ function Connect-FuFilePages {
         $picked = @($script:Ui.DupList.SelectedItems)
         if (-not (Confirm-FuAction ('{0} will move to the Recycle Bin. The originals are not touched.' -f (Get-FuPlural $picked.Count 'copy' 'copies')) 'Move to the Recycle Bin?' 'Move')) { return }
         $failed = 0
-        foreach ($p in $picked) { try { Send-ToRecycleBin $p.Copy } catch { $failed++ } }
+        $failedPath = ''
+        foreach ($p in $picked) { try { Send-ToRecycleBin $p.Copy } catch { $failed++; $failedPath = $p.Copy } }
+        Show-FuBlockedNote $failedPath
         $left = @($script:DupRows | Where-Object { $picked -notcontains $_ })
         $script:DupRows = $left
         Set-FuRows 'Dup' $left 'No duplicates left.'
@@ -703,7 +721,12 @@ function Connect-FuFilePages {
     $ui.RecoverGo.Add_Click({
         $picked = @($script:Ui.RecoverList.SelectedItems)
         $failed = 0
-        foreach ($p in $picked) { try { [void](Restore-RecycleBinEntry $p.InfoPath) } catch { $failed++ } }
+        $failedPath = ''
+        foreach ($p in $picked) {
+            try { [void](Restore-RecycleBinEntry $p.InfoPath) }
+            catch { $failed++; try { $failedPath = (Read-RecycleInfoFile $p.InfoPath).OriginalPath } catch { } }
+        }
+        Show-FuBlockedNote $failedPath
         Show-FuToast $(if ($failed) { "$failed couldn't be restored" } else { 'Restored {0}' -f (Get-FuPlural $picked.Count 'file') })
         Start-FuRecoverLoad
     })
@@ -802,10 +825,14 @@ function Start-FuShred {
     if (-not (Confirm-FuAction "'$name' will be overwritten and deleted. This can't be undone, and it doesn't go to the Recycle Bin." 'Delete this file permanently?' 'Delete Permanently' $true)) { return }
     $passes = $(if ($ui.Pass7.IsChecked) { 7 } elseif ($ui.Pass3.IsChecked) { 3 } else { 1 })
     $script:ShredName = $name
+    $script:ShredPath = $path
     Start-FuWork 'Deleting the file' { param($p, $n) Remove-FileSecurely $p $n } @($path, $passes) -Exclusive -OnDone {
         param($o)
         Set-FuShredFile ''
         Show-FuToast "'$script:ShredName' was overwritten and deleted"
+    } -OnFail {
+        param($why)
+        if (-not (Show-FuBlockedNote $script:ShredPath)) { Show-FuInfo "Something went wrong while deleting the file.`r`n`r`n$why" 'Warning' 'That didn''t work' }
     }
 }
 
@@ -955,6 +982,158 @@ function Set-FuStartupSwitch($Toggle) {
     $script:Ui.StartupSub.Text = '{0} on, {1} off. Task Manager sees the same switches.' -f $on, ($script:StartupRows.Count - $on)
     Update-FuStartupTile
     Show-FuToast $(if ($want) { "$($row.Name) will start with Windows" } else { "$($row.Name) won't start with Windows" })
+}
+
+# ---------------------------------------------------------------- Protection
+
+function Connect-FuProtection {
+    $ui = $script:Ui
+    $ui.HomeAlertGo.Add_Click({ $script:Ui.NavProtect.IsChecked = $true })
+    $ui.ProtectOpen.Add_Click({
+        try { Start-Process 'windowsdefender:' -ErrorAction Stop }
+        catch { Show-FuInfo "Windows Security didn't open. You can find it in the Start menu." 'Warning' "Couldn't open it" }
+    })
+    $ui.ProtectQuick.Add_Click({ Start-FuDefenderScan 'Quick' })
+    $ui.ProtectFull.Add_Click({
+        if (Confirm-FuAction 'A full scan checks every file and can take hours, and your PC may run slower. Microsoft Defender runs it, so only Windows Security can stop it once it starts.' 'Run a full scan?' 'Start Scan') { Start-FuDefenderScan 'Full' }
+    })
+    $ui.ProtectUpdate.Add_Click({
+        Set-FuProtectBusy $true
+        Start-FuWork 'Updating virus definitions' { Update-DefenderDefinitions } -NoCancel -OnEnd { Set-FuProtectBusy $false } -OnDone {
+            Show-FuToast 'Virus definitions are up to date'
+            Start-FuProtectionLoad -Threats
+        }
+    })
+    $ui.ProtectRansom.Add_Click({ Set-FuRansomSwitch })
+}
+
+# Status is read in the background. Threats are only read when the Protection page needs them.
+function Start-FuProtectionLoad([switch]$Threats) {
+    $script:ProtectChecked = Get-Date
+    Start-FuWork 'Reading protection status' {
+        param($WithThreats)
+        [pscustomobject]@{ Status = (Get-ProtectionStatus | Select-Object -First 1); HasThreats = [bool]$WithThreats; Threats = @(if ($WithThreats) { Get-ProtectionThreats }) }
+    } -Arguments @([bool]$Threats) -Quiet -OnDone { param($o) Update-FuProtection ($o | Select-Object -First 1) } -OnFail {
+        if (-not $script:Protection) { Update-FuProtection ([pscustomobject]@{ Status = (Get-FuProtectionState @() $null); HasThreats = $false; Threats = @() }) }
+    }
+}
+
+# Explains a failed file action when ransomware protection caused it. True if it did.
+function Show-FuBlockedNote([string]$Path) {
+    if (-not (Test-FuRansomwareBlocks $Path)) { return $false }
+    Show-FuInfo (Get-FuRansomwareBlockText) 'Warning' 'Blocked by ransomware protection'
+    return $true
+}
+
+# 'Today at 5:49 PM', 'Yesterday at 5:49 PM', '12 days ago', or Never
+function Format-FuAgo($Date, [datetime]$Now = (Get-Date)) {
+    if (-not $Date) { return 'Never' }
+    $when = [datetime]$Date
+    $days = ($Now.Date - $when.Date).Days
+    if ($days -le 0) { return 'Today at ' + $when.ToShortTimeString() }
+    if ($days -eq 1) { return 'Yesterday at ' + $when.ToShortTimeString() }
+    return "$days days ago"
+}
+
+function Set-FuProtectBusy([bool]$Busy) {
+    $ui = $script:Ui
+    foreach ($b in $ui.ProtectQuick, $ui.ProtectFull, $ui.ProtectUpdate) { $b.IsEnabled = -not $Busy }
+}
+
+# The Health tile says what the Protection page says. When there's a problem it leads there, not to Disk Health.
+function Update-FuProtectionTile {
+    $ui = $script:Ui
+    $s = $script:Protection
+    if (-not $s -or $s.Level -eq 'unknown') { return }
+    switch ($s.Level) {
+        'bad'  { $ui.TileHealthValue.Text = 'Protection off'; $ui.TileHealthSub.Text = 'See what to do' }
+        'warn' { $ui.TileHealthValue.Text = 'Update needed'; $ui.TileHealthSub.Text = 'Virus definitions are old' }
+        default {
+            $ui.TileHealthValue.Text = $(if ($script:DisksBad) { 'Check disks' } else { 'All good' })
+            $ui.TileHealthSub.Text = "$($s.Product) is on"
+        }
+    }
+}
+
+function Update-FuProtection($Data) {
+    if (-not $Data -or -not $Data.Status) { return }
+    $ui = $script:Ui
+    $s = $Data.Status
+    $script:Protection = $s
+
+    Set-FuShown $ui.HomeAlert ($s.Level -eq 'bad')
+    $ui.HomeAlertTitle.Text = $s.Title
+    $ui.HomeAlertText.Text = $s.Detail
+    Update-FuProtectionTile
+
+    $ui.ProtectTitle.Text = $s.Title
+    $ui.ProtectDetail.Text = $s.Detail
+    $ui.ProtectIcon.Background = Get-FuBrush $(switch ($s.Level) { 'good' { 'Green' } 'warn' { 'Orange' } 'bad' { 'Red' } default { 'Ink3' } })
+    Set-FuShown $ui.ProtectControls ([bool]$s.Usable)
+    if (-not $s.Usable) { return }
+
+    $defs = Format-FuAgo $s.SignatureDate
+    $ui.ProtectFacts.ItemsSource = @(
+        [pscustomobject]@{ Key = 'Real-time protection'; Value = $(if ($s.RealTime) { 'On' } else { 'Off' }) }
+        [pscustomobject]@{ Key = 'Virus definitions'; Value = $(if ($s.SignatureDate) { 'Updated ' + $defs.Substring(0, 1).ToLower() + $defs.Substring(1) } else { 'Unknown' }) }
+        [pscustomobject]@{ Key = 'Last quick scan'; Value = (Format-FuAgo $s.QuickScan) }
+        [pscustomobject]@{ Key = 'Last full scan'; Value = (Format-FuAgo $s.FullScan) }
+    )
+    $ui.ProtectRansom.IsEnabled = [bool]$s.RansomwareKnown
+    $ui.ProtectRansom.IsChecked = [bool]$s.Ransomware
+
+    if ($Data.HasThreats) {
+        $sep = Get-FuSep
+        $rows = @($Data.Threats | Where-Object { $_ })
+        $ui.ProtectThreats.ItemsSource = @($rows | ForEach-Object {
+            [pscustomobject]@{
+                Title   = $_.Name
+                Detail  = (@((Format-FuAgo $_.When), $_.Severity, $_.Path) | Where-Object { $_ }) -join $sep
+                TagText = $_.Status
+                Tone    = $_.Tone
+                Tip     = $_.Path
+            }
+        })
+        Set-FuShown $ui.ProtectThreats ([bool]$rows.Count)
+        Set-FuShown $ui.ProtectNoThreats (-not $rows.Count)
+        $ui.ProtectNoThreats.Text = 'Microsoft Defender has no recent threats on record.'
+        if ($script:ScanStarted) {
+            $new = @($rows | Where-Object { $_.Changed -ge $script:ScanStarted }).Count
+            $script:ScanStarted = $null
+            if ($new) { Show-FuInfo "The scan found $(Get-FuPlural $new 'threat'). Recent threats shows what Microsoft Defender did about it." 'Warning' 'Threats found' }
+            else { Show-FuToast 'Scan finished. Nothing new found.' }
+        }
+    }
+}
+
+function Start-FuDefenderScan([string]$Kind) {
+    Set-FuProtectBusy $true
+    $script:ScanKind = $Kind
+    $script:ScanWhen = Get-Date
+    # Stopping this task wouldn't stop the scan: Defender carries on by itself. So there's no Cancel.
+    Start-FuWork "Running a $($Kind.ToLower()) scan" { param($K) Start-DefenderScan $K } -Arguments @($Kind) -NoCancel -OnEnd { Set-FuProtectBusy $false } -OnDone {
+        $script:ScanStarted = $script:ScanWhen
+        Start-FuProtectionLoad -Threats
+    }
+}
+
+# The switch only moves once Windows has really made the change
+function Set-FuRansomSwitch {
+    $ui = $script:Ui
+    $script:RansomWant = [bool]$ui.ProtectRansom.IsChecked
+    $ui.ProtectRansom.IsChecked = -not $script:RansomWant
+    if (-not (Require-FuAdmin 'Changing ransomware protection')) { return }
+    $ok = $(if ($script:RansomWant) {
+        Confirm-FuAction "Apps Windows doesn't trust won't be able to change files in Documents, Pictures, Videos, Music and Desktop. That includes Makatools, so Large Files, Duplicates, Recover Deleted and Secure Delete can't change those folders while it's on. If another app gets blocked, Windows tells you, and you can allow it in Windows Security." 'Turn on ransomware protection?' 'Turn On'
+    } else {
+        Confirm-FuAction 'Any app will be able to change files in your main folders again, including ransomware.' 'Turn off ransomware protection?' 'Turn Off' $true
+    })
+    if (-not $ok) { return }
+    $ui.ProtectRansom.IsEnabled = $false
+    Start-FuWork 'Changing ransomware protection' { param($On) Set-RansomwareProtection $On } -Arguments @($script:RansomWant) -NoCancel -OnEnd { $script:Ui.ProtectRansom.IsEnabled = $true } -OnDone {
+        $script:Ui.ProtectRansom.IsChecked = $script:RansomWant
+        Show-FuToast ('Ransomware protection is ' + $(if ($script:RansomWant) { 'on' } else { 'off' }))
+    }
 }
 
 # --- Apps

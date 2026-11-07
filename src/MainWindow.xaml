@@ -166,6 +166,25 @@
       </DataTemplate.Triggers>
     </DataTemplate>
 
+    <DataTemplate x:Key="ThreatRow">
+      <Grid ToolTip="{Binding Tip}">
+        <Border x:Name="Sep" Style="{StaticResource RowLine}" Margin="16,0,0,0"/>
+        <Grid Margin="16,9">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <StackPanel>
+            <TextBlock Text="{Binding Title}" Style="{StaticResource RowTitle}"/>
+            <TextBlock Text="{Binding Detail}" Style="{StaticResource DetailMaybe}"/>
+          </StackPanel>
+          <Border Grid.Column="1" Style="{StaticResource ToneBox}" Margin="12,0,0,0"><TextBlock Text="{Binding TagText}" Style="{StaticResource ToneText}"/></Border>
+        </Grid>
+      </Grid>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding RelativeSource={RelativeSource PreviousData}}" Value="{x:Null}">
+          <Setter TargetName="Sep" Property="Visibility" Value="Collapsed"/>
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
     <DataTemplate x:Key="DiskCard">
       <Border Style="{StaticResource CardBox}" Margin="0,0,0,12" Padding="18,15">
         <Grid>
@@ -261,6 +280,9 @@
             </RadioButton>
 
             <TextBlock Text="Health" Style="{StaticResource NavHead}"/>
+            <RadioButton x:Name="NavProtect" Style="{StaticResource NavItem}" Tag="Protect">
+              <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#34C759"><TextBlock Text="&#xEA18;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Protection" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+            </RadioButton>
             <RadioButton x:Name="NavDisk" Style="{StaticResource NavItem}" Tag="Disk">
               <StackPanel Orientation="Horizontal"><Border Width="24" Height="24" CornerRadius="6" Background="#A2845E"><TextBlock Text="&#xEDA2;" Style="{StaticResource Glyph}" FontSize="13" Foreground="White"/></Border><TextBlock Text="Disk Health" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
             </RadioButton>
@@ -278,6 +300,16 @@
       <!-- ............................................................. Home -->
       <ScrollViewer x:Name="PageHome" VerticalScrollBarVisibility="Auto" Focusable="False">
         <StackPanel Margin="32,40,32,32">
+          <Border x:Name="HomeAlert" Visibility="Collapsed" CornerRadius="12" Background="{DynamicResource RedSoft}" Padding="16,12" Margin="0,0,0,14">
+            <DockPanel>
+              <Button x:Name="HomeAlertGo" DockPanel.Dock="Right" Style="{StaticResource Danger}" Content="Review" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="8" Background="{DynamicResource Red}" VerticalAlignment="Center"><TextBlock Text="&#xEA18;" Style="{StaticResource Glyph}" FontSize="16" Foreground="White"/></Border>
+              <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="HomeAlertTitle" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Red}"/>
+                <TextBlock x:Name="HomeAlertText" FontSize="12.5" Foreground="{DynamicResource Ink}" TextWrapping="Wrap" Margin="0,1,0,0"/>
+              </StackPanel>
+            </DockPanel>
+          </Border>
           <Border CornerRadius="16" MinHeight="196">
             <Border.Background>
               <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
@@ -612,6 +644,63 @@
       </ScrollViewer>
 
       <!-- ............................................................. Disk Health -->
+      <!-- ............................................................. Protection -->
+      <ScrollViewer x:Name="PageProtect" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel Margin="32,40,32,32">
+          <TextBlock Text="Protection" Style="{StaticResource PageTitle}"/>
+          <TextBlock Text="Microsoft Defender's main controls, in one place." Style="{StaticResource PageSub}" Margin="0,3,0,16"/>
+
+          <Border Style="{StaticResource CardBox}" Padding="18,16">
+            <DockPanel>
+              <Button x:Name="ProtectOpen" DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Open Windows Security" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              <Border x:Name="ProtectIcon" DockPanel.Dock="Left" Width="44" Height="44" CornerRadius="11" Background="{DynamicResource Ink3}" VerticalAlignment="Center"><TextBlock Text="&#xEA18;" Style="{StaticResource Glyph}" FontSize="22" Foreground="White"/></Border>
+              <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="ProtectTitle" Text="Checking protection" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" TextOptions.TextFormattingMode="Ideal"/>
+                <TextBlock x:Name="ProtectDetail" Text=" " FontSize="13" Foreground="{DynamicResource Ink2}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+              </StackPanel>
+            </DockPanel>
+          </Border>
+
+          <StackPanel x:Name="ProtectControls" Visibility="Collapsed">
+            <TextBlock Text="Status" Style="{StaticResource Section}"/>
+            <Border Style="{StaticResource CardBox}">
+              <ItemsControl x:Name="ProtectFacts" ItemTemplate="{StaticResource FactRow}" Focusable="False"/>
+            </Border>
+
+            <TextBlock Text="Scan and update" Style="{StaticResource Section}"/>
+            <Border Style="{StaticResource CardBox}" Padding="16,13">
+              <StackPanel>
+                <TextBlock Text="A quick scan checks the places threats usually hide. A full scan checks every file and can take hours. You can keep using your PC during either, and Windows Security can stop a scan." Style="{StaticResource Body}"/>
+                <WrapPanel Margin="0,12,0,0">
+                  <Button x:Name="ProtectQuick" Style="{StaticResource Primary}" Content="Quick Scan" Margin="0,0,8,0"/>
+                  <Button x:Name="ProtectFull" Style="{StaticResource Secondary}" Content="Full Scan" Margin="0,0,8,0"/>
+                  <Button x:Name="ProtectUpdate" Style="{StaticResource Secondary}" Content="Update Definitions"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Ransomware protection" Style="{StaticResource Section}"/>
+            <Border Style="{StaticResource CardBox}">
+              <DockPanel Margin="16,11">
+                <ToggleButton x:Name="ProtectRansom" DockPanel.Dock="Right" Style="{StaticResource Switch}" VerticalAlignment="Center" Margin="14,0,0,0" AutomationProperties.Name="Ransomware protection"/>
+                <StackPanel>
+                  <TextBlock Text="Controlled folder access" Style="{StaticResource RowTitle}"/>
+                  <TextBlock x:Name="ProtectRansomText" Text="Stops apps Windows doesn't trust from changing files in Documents, Pictures and your other main folders. Changing this needs administrator rights." Foreground="{DynamicResource Ink2}" FontSize="12" TextWrapping="Wrap" Margin="0,1,0,0"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+
+            <TextBlock Text="Recent threats" Style="{StaticResource Section}"/>
+            <Border Style="{StaticResource CardBox}">
+              <StackPanel>
+                <TextBlock x:Name="ProtectNoThreats" Text="Checking..." Style="{StaticResource Body}" Margin="16,12"/>
+                <ItemsControl x:Name="ProtectThreats" ItemTemplate="{StaticResource ThreatRow}" Focusable="False"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+
       <ScrollViewer x:Name="PageDisk" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Focusable="False">
         <StackPanel Margin="32,40,32,32">
           <TextBlock Text="Disk Health" Style="{StaticResource PageTitle}"/>
