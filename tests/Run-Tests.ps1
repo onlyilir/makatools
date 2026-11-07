@@ -1,4 +1,4 @@
-# Makatools tests. Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
+﻿# Makatools tests. Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 # Works in a temp folder and a throwaway HKCU key; does not touch real user files.
 # Exits 1 if any test fails.
 # -ResultFile also writes everything to a file (for elevated runs, whose window closes).
@@ -86,6 +86,23 @@ Test-Case 'Invoke-Cleanup with Parts only deletes files matching the filter' {
     Assert ($r.Deleted -eq 1) "deleted = $($r.Deleted)"
     Assert (Test-Path -LiteralPath (Join-Path $d 'keep.db')) 'non-matching file deleted'
     Assert (Test-Path -LiteralPath (Join-Path $d 'sub\thumbcache_64.db')) 'went into subfolder despite Recurse=false'
+}
+
+Test-Case 'desktop.ini is never counted or removed; an empty Recycle Bin counts as empty' {
+    $d = Join-Path $tmp 'ini'
+    New-TestFile (Join-Path $d 'desktop.ini') 100
+    New-TestFile (Join-Path $d 'junk.tmp') 100
+    Assert ((Measure-FuFolder $d).Files -eq 1) 'desktop.ini was counted'
+    $r = Invoke-Cleanup @([pscustomobject]@{ Path = $d })
+    Assert ($r.Deleted -eq 1 -and $r.Skipped -eq 0) "deleted $($r.Deleted), skipped $($r.Skipped)"
+    Assert (Test-Path -LiteralPath (Join-Path $d 'desktop.ini')) 'desktop.ini was removed'
+    $bin = Join-Path $tmp 'fake\$Recycle.Bin\S-1-5-21'
+    New-TestFile (Join-Path $bin 'desktop.ini') 129
+    Assert ((Measure-FuFolder $bin).Files -eq 0) 'empty bin not empty'
+    New-TestFile (Join-Path $bin '$IABC.txt') 50
+    New-TestFile (Join-Path $bin '$RABC.txt') 5000
+    $m = Measure-FuFolder $bin
+    Assert ($m.Files -eq 1 -and $m.Bytes -eq 5000) "one deleted file counted as $($m.Files), $($m.Bytes) bytes"
 }
 
 Test-Case 'Cleanup never sweeps a whole drive' {
@@ -564,6 +581,14 @@ if (-not $SkipUi) {
             Assert ((Get-FuEffectiveTheme $t) -eq $t) "theme $t"
             Assert (Get-FuBrush 'SegmentOn') "colour SegmentOn missing in $t"
         }
+    }
+
+    Test-Case 'UI: the window always fits the screen' {
+        $w = New-Object Windows.Window
+        Set-FuWindowFit $w 1920 1040
+        Assert ($w.Width -eq 1120 -and $w.Height -eq 760 -and $w.MinWidth -eq 960 -and $w.MinHeight -eq 620) "big screen: $($w.Width)x$($w.Height), min $($w.MinWidth)x$($w.MinHeight)"
+        Set-FuWindowFit $w 958 580
+        Assert ($w.Width -eq 958 -and $w.Height -eq 580 -and $w.MinWidth -le 958 -and $w.MinHeight -le 580) "small screen: $($w.Width)x$($w.Height), min $($w.MinWidth)x$($w.MinHeight)"
     }
 
     Test-Case 'UI: colour files define the same names' {

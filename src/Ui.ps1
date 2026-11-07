@@ -1,4 +1,4 @@
-# Makatools - user interface (WPF). All real work lives in Core.ps1; this file only wires the window
+﻿# Makatools - user interface (WPF). All real work lives in Core.ps1; this file only wires the window
 # in MainWindow.xaml to it. Slow work runs in a second runspace (Start-FuWork) so the window stays
 # responsive. Event handlers run after the function that made them has returned, so they cannot see
 # its locals: controls are reached through $script:Ui (every x:Name in the window) and state through
@@ -107,8 +107,10 @@ function Confirm-FuAction($Text, $Title = 'Are you sure?', $Yes = 'Continue', [b
 
 function Restart-FuAsAdmin {
     try {
+        $launcher = Join-Path $script:AppRoot 'Makatools-Setup.exe'
         $script_ = Join-Path $script:AppRoot 'Makatools.ps1'
-        Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$script_`"") -ErrorAction Stop
+        if (Test-Path -LiteralPath $launcher) { Start-Process -FilePath $launcher -Verb RunAs -ArgumentList '--run' -ErrorAction Stop }
+        else { Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$script_`"") -ErrorAction Stop }
         $script:Ui.Window.Close()
     } catch {
         Show-FuToast 'Administrator rights were not granted'
@@ -320,6 +322,7 @@ function New-MainForm {
         $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create((New-Object Uri($icoPath)), 'None', 'OnLoad')
     }
     $window.Title = 'Makatools'
+    Set-FuWindowFit $window ([Windows.SystemParameters]::WorkArea.Width) ([Windows.SystemParameters]::WorkArea.Height)
     Connect-FuChrome
     Connect-FuNavigation
     Connect-FuHome
@@ -338,6 +341,14 @@ function New-MainForm {
         foreach ($t in @($script:Tasks)) { try { [void]$t.PS.BeginStop($null, $null) } catch { } }
     })
     return $window
+}
+
+# Keeps the window on screen: its normal and minimum sizes shrink to fit a small work area
+function Set-FuWindowFit($Window, [double]$AreaWidth, [double]$AreaHeight) {
+    $Window.MinWidth = [math]::Min(960, $AreaWidth)
+    $Window.MinHeight = [math]::Min(620, $AreaHeight)
+    $Window.Width = [math]::Min(1120, $AreaWidth)
+    $Window.Height = [math]::Min(760, $AreaHeight)
 }
 
 function Connect-FuChrome {

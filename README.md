@@ -1,4 +1,4 @@
-# Makatools
+﻿# Makatools
 
 Free tools to clean up, speed up and look after your PC. For Windows 10 and 11 (64-bit). No ads, no paid tiers, no telemetry.
 
@@ -16,8 +16,9 @@ Prefer not to install? Download the portable zip, extract it, and run `Start-Mak
 
 ### Warnings you may see
 
-Makatools isn't code-signed yet, so the first time you run it:
+Makatools isn't code-signed yet, so the first time you download and run it:
 
+- **Microsoft Edge** may say the file "isn't commonly downloaded". Point at the download, choose **...** then **Keep**. On the next screen, open the arrow beside **Delete** and choose **Keep anyway**.
 - **Windows SmartScreen** may say "Windows protected your PC". Choose **More info**, then **Run anyway**.
 - **Your antivirus** may warn about a new file that few people have downloaded. That's about how new the file is, not anything it was found doing. All of the source code is here to read.
 

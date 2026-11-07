@@ -6,6 +6,7 @@
 //   Makatools-Setup.exe                 the window: install or update
 //   Makatools-Setup.exe --update        same, but starts by itself and reopens Makatools when done
 //   Makatools-Setup.exe --uninstall     the window: uninstall (the copy kept in the install folder)
+//   Makatools-Setup.exe --run           starts the installed app with no console window; the shortcuts use this
 //   --quiet                             no window; exit code 0 = done, 1 = failed (see the log)
 //   --target <dir>                      another install folder (tests)
 //   --snapshot <dir>                    developer check: every screen to PNG; changes nothing
@@ -18,6 +19,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -50,6 +52,11 @@ namespace MakatoolsSetup
             bool update = args.Contains("--update");
             string target = ArgValue(args, "--target") ?? Installer.DefaultTarget;
             string shots = ArgValue(args, "--snapshot");
+
+            // The shortcuts come here. Windows 11 keeps a hidden Windows Terminal open for a
+            // PowerShell started from a shortcut, even with -WindowStyle Hidden; this way there is no console.
+            if (args.Contains("--run"))
+                return Installer.OpenApp(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)) ? 0 : 1;
 
             if (quiet)
                 return Installer.Quiet(uninstall, target);
@@ -125,6 +132,68 @@ namespace MakatoolsSetup
         {
             return "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + Path.Combine(target, "Makatools.ps1") + "\"";
         }
+
+        // Starts the app with no console window. The working folder isn't the install folder,
+        // so a running app never stops that folder being removed.
+        public static bool OpenApp(string target)
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            try
+            {
+                // The app id gives the window its own taskbar button with the Makatools logo,
+                // instead of being shown as PowerShell.
+                var si = new STARTUPINFO { lpTitle = AppId, dwFlags = STARTF_TITLEISAPPID };
+                si.cb = Marshal.SizeOf(si);
+                PROCESS_INFORMATION pi;
+                var command = new StringBuilder("\"" + PowerShell + "\" " + AppArguments(target));
+                if (CreateProcess(PowerShell, command, IntPtr.Zero, IntPtr.Zero, false, CREATE_NO_WINDOW, IntPtr.Zero, home, ref si, out pi))
+                {
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return true;
+                }
+                Log("Opening with the app id failed (" + Marshal.GetLastWin32Error() + "), opening without it.");
+                Process.Start(new ProcessStartInfo(PowerShell, AppArguments(target)) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = home });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Could not open the app: " + ex.Message);
+                return false;
+            }
+        }
+
+        const string AppId = "onlyilir.Makatools";
+        const int STARTF_TITLEISAPPID = 0x1000;
+        const uint CREATE_NO_WINDOW = 0x08000000;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct STARTUPINFO
+        {
+            public int cb;
+            public string lpReserved, lpDesktop, lpTitle;
+            public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+            public short wShowWindow, cbReserved2;
+            public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess, hThread;
+            public int dwProcessId, dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool CreateProcess(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes,
+            bool inheritHandles, uint flags, IntPtr environment, string directory, ref STARTUPINFO startup, out PROCESS_INFORMATION info);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr handle);
+
+        // A copy keeps the "came from the internet" mark, which would bring up SmartScreen on every start
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool DeleteFile(string path);
 
         public static void Log(string message)
         {
@@ -212,6 +281,7 @@ namespace MakatoolsSetup
             string keep = Path.Combine(target, Program.SelfName);
             if (!SamePath(me.Location, keep))
                 Retry(() => File.Copy(me.Location, keep, true));
+            DeleteFile(keep + ":Zone.Identifier");
 
             string icon = Path.Combine(target, "assets", "Makatools.ico");
             Shortcut(StartMenuLink, target, icon);
@@ -278,9 +348,9 @@ namespace MakatoolsSetup
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(link));
                 dynamic lnk = shell.CreateShortcut(link);
-                lnk.TargetPath = PowerShell;
-                lnk.Arguments = AppArguments(target);
-                lnk.WorkingDirectory = target;
+                lnk.TargetPath = Path.Combine(target, Program.SelfName);
+                lnk.Arguments = "--run";
+                lnk.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 lnk.IconLocation = icon + ",0";
                 lnk.Description = "Free tools to clean up, speed up and look after your PC";
                 lnk.Save();
@@ -379,23 +449,18 @@ namespace MakatoolsSetup
                 Find<TextBlock>("BodyText").Text = "Your settings and activity log are kept.";
                 Find<Button>("GoButton").Content = "Update";
             }
+            // Started from SmartScreen or a browser, Windows can open this behind the browser. Come to the front.
+            Window.Topmost = true;
+            Window.ContentRendered += delegate
+            {
+                Window.Activate();
+                Window.Topmost = false;
+            };
             if (autoUpdate)
                 Window.ContentRendered += delegate { Go(); };
         }
 
-        void OpenApp()
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo(Installer.PowerShell, Installer.AppArguments(target))
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = target
-                });
-            }
-            catch (Exception ex) { Installer.Log("Could not open the app: " + ex.Message); }
-        }
+        void OpenApp() { Installer.OpenApp(target); }
 
         void ShowWorking()
         {

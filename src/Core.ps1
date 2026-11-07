@@ -5,7 +5,7 @@ if (-not $script:AppRoot) { $script:AppRoot = Split-Path -Parent $PSScriptRoot }
 
 # The version, and the GitHub repository ("owner/name") whose releases the update check reads.
 # These are functions so background tasks get them too. An empty repository turns updates off.
-function Get-FuVersion { '2.2.0' }
+function Get-FuVersion { '2.2.1' }
 function Get-FuUpdateRepo { 'onlyilir/makatools' }
 
 # ---------------------------------------------------------------- environment
@@ -187,7 +187,11 @@ function Get-FuPartFiles($Part) {
     $recurse = $(if ($null -ne $Part.Recurse) { [bool]$Part.Recurse } else { $true })
     # Never sweep a whole drive
     if ($filter -eq '*' -and ([string]$Part.Path).TrimEnd('\').Length -le 2) { return }
-    Get-ChildItem -LiteralPath $Part.Path -Filter $filter -Recurse:$recurse -File -Force -ErrorAction SilentlyContinue
+    # desktop.ini is a folder's own settings file, never junk. In the Recycle Bin, $I files only
+    # describe the $R files, so an empty bin counts as empty and each deleted file counts once.
+    $inBin = ([string]$Part.Path) -like '*$Recycle.Bin*'
+    Get-ChildItem -LiteralPath $Part.Path -Filter $filter -Recurse:$recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'desktop.ini' -and -not ($inBin -and $_.Name -like '$I*') }
 }
 
 function Measure-FuFolder([string]$Path, [string]$Filter = '*', [bool]$Recurse = $true) {

@@ -1,7 +1,7 @@
-# Tests Makatools-Setup.exe against temp folders and a throwaway registry key, so the real Start menu,
+﻿# Tests Makatools-Setup.exe against temp folders and a throwaway registry key, so the real Start menu,
 # Desktop and Settings > Apps are not touched. Build first (build\Build.ps1).
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Setup.ps1 [-SetupExe dist\Makatools-Setup.exe]
-param([string]$SetupExe)
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Setup.ps1 [-SetupExe dist\Makatools-Setup.exe] [-LaunchApp]
+param([string]$SetupExe, [switch]$LaunchApp)
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -47,7 +47,10 @@ try {
     foreach ($f in 'Makatools.ps1', 'Makatools-Setup.exe', 'src\Core.ps1', 'src\Ui.ps1', 'src\MainWindow.xaml', 'src\Theme.xaml', 'src\Colors.Light.xaml', 'src\Colors.Dark.xaml', 'assets\Makatools.ico', 'assets\logo.png') {
         Check (Test-Path -LiteralPath (Join-Path $dir $f)) "installed $f"
     }
-    Check ((Get-FileHash -LiteralPath (Join-Path $dir 'src\Ui.ps1')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $repo 'src\Ui.ps1')).Hash) 'installed files match the source exactly'
+    # Compared as text: a source zip from GitHub has different line endings from a build folder
+    $sameText = { param($a, $b) ((Get-Content -LiteralPath $a -Raw) -replace "`r`n", "`n") -ceq ((Get-Content -LiteralPath $b -Raw) -replace "`r`n", "`n") }
+    Check (& $sameText (Join-Path $dir 'src\Ui.ps1') (Join-Path $repo 'src\Ui.ps1')) 'installed files match the source'
+    Check (-not (Get-Item -LiteralPath (Join-Path $dir 'Makatools-Setup.exe') -Stream Zone.Identifier -ErrorAction SilentlyContinue)) 'kept copy has no "from the internet" mark'
     Check (-not (Test-Path -LiteralPath (Join-Path $dir 'Uninstall.ps1'))) 'old 2.1 uninstaller removed'
     Check (-not (Test-Path -LiteralPath (Join-Path $dir 'src\OldFile.ps1'))) 'old program files removed'
     Check ((Get-Content -LiteralPath (Join-Path $dir 'Logs\freeutil.log') -Raw) -match 'keep me') 'update keeps the log'
@@ -60,8 +63,8 @@ try {
         Check (Test-Path -LiteralPath $lnkPath) "$s shortcut exists"
         if (Test-Path -LiteralPath $lnkPath) {
             $lnk = $shell.CreateShortcut($lnkPath)
-            Check ($lnk.TargetPath -like '*System32\WindowsPowerShell\v1.0\powershell.exe') "$s shortcut runs 64-bit PowerShell"
-            Check ($lnk.Arguments -like "*$dir\Makatools.ps1*") "$s shortcut points at the installed app"
+            Check ($lnk.TargetPath -eq (Join-Path $dir 'Makatools-Setup.exe') -and $lnk.Arguments -eq '--run') "$s shortcut uses the no-console launcher"
+            Check ($lnk.WorkingDirectory -notlike "*$dir*") "$s shortcut doesn't hold the install folder open"
             Check ($lnk.IconLocation -like '*assets\Makatools.ico*') "$s shortcut uses the app icon"
         }
     }
@@ -76,6 +79,26 @@ try {
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     Check ($code -eq 0 -and -not $run) "installed app loads ($($run -join ' '))"
+
+    # The launcher starts the installed app and stays out of the way. This opens the real window, so it
+    # only runs when asked (in the test VM). Not Start-Process -Wait: that also waits for the app to close.
+    if ($LaunchApp) {
+        $launcher = [Diagnostics.Process]::Start((Join-Path $dir 'Makatools-Setup.exe'), '--run')
+        Check ($launcher.WaitForExit(15000) -and $launcher.ExitCode -eq 0) '--run exits 0 straight away'
+        $app = $null
+        $end = (Get-Date).AddSeconds(30)
+        while (-not $app -and (Get-Date) -lt $end) {
+            Start-Sleep -Milliseconds 200
+            $app = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$dir\Makatools.ps1*" } | Select-Object -First 1
+        }
+        Check ([bool]$app) '--run starts the installed app'
+        if ($app) {
+            Start-Sleep -Seconds 5
+            Check ([bool](Get-Process -Id $app.ProcessId -ErrorAction SilentlyContinue)) 'the app keeps running'
+            Stop-Process -Id $app.ProcessId -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 800
+        }
+    }
 
     # ------------------------------------------------------------ uninstall
     $other = Join-Path $tmp 'not-makatools'
